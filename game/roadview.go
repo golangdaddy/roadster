@@ -29,8 +29,8 @@ type RoadView struct {
 
 // NewRoadView creates a new road view
 func NewRoadView(gameState *models.GameState) *RoadView {
-	// Create a 4-lane highway
-	highway := road.NewRoad(4, 80.0) // 4 lanes, 80 pixels wide each
+	// Create a 3-lane one-way highway
+	highway := road.NewRoad(3, 80.0) // 3 lanes, 80 pixels wide each
 	
 	startLane := 1 // Start in second lane (0-indexed, so lane 2)
 	
@@ -85,6 +85,62 @@ func (rv *RoadView) Update() error {
 			if rv.carSpeed > 0 {
 				rv.carSpeed = 0
 			}
+		}
+	}
+	
+	// Handle number keys to change number of lanes (1-9)
+	if inpututil.IsKeyJustPressed(ebiten.KeyDigit1) {
+		rv.road.SetNumLanes(1)
+		if rv.carLane >= 1 {
+			rv.carLane = 0
+		}
+	}
+	if inpututil.IsKeyJustPressed(ebiten.KeyDigit2) {
+		rv.road.SetNumLanes(2)
+		if rv.carLane >= 2 {
+			rv.carLane = 1
+		}
+	}
+	if inpututil.IsKeyJustPressed(ebiten.KeyDigit3) {
+		rv.road.SetNumLanes(3)
+		if rv.carLane >= 3 {
+			rv.carLane = 2
+		}
+	}
+	if inpututil.IsKeyJustPressed(ebiten.KeyDigit4) {
+		rv.road.SetNumLanes(4)
+		if rv.carLane >= 4 {
+			rv.carLane = 3
+		}
+	}
+	if inpututil.IsKeyJustPressed(ebiten.KeyDigit5) {
+		rv.road.SetNumLanes(5)
+		if rv.carLane >= 5 {
+			rv.carLane = 4
+		}
+	}
+	if inpututil.IsKeyJustPressed(ebiten.KeyDigit6) {
+		rv.road.SetNumLanes(6)
+		if rv.carLane >= 6 {
+			rv.carLane = 5
+		}
+	}
+	if inpututil.IsKeyJustPressed(ebiten.KeyDigit7) {
+		rv.road.SetNumLanes(7)
+		if rv.carLane >= 7 {
+			rv.carLane = 6
+		}
+	}
+	if inpututil.IsKeyJustPressed(ebiten.KeyDigit8) {
+		rv.road.SetNumLanes(8)
+		if rv.carLane >= 8 {
+			rv.carLane = 7
+		}
+	}
+	if inpututil.IsKeyJustPressed(ebiten.KeyDigit9) {
+		rv.road.SetNumLanes(9)
+		if rv.carLane >= 9 {
+			rv.carLane = 8
 		}
 	}
 	

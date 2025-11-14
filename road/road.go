@@ -160,34 +160,19 @@ func (r *Road) Draw(screen *ebiten.Image, cameraX, cameraY float64) {
 		}
 	}
 	
-	// Draw center line (double yellow for multi-lane roads) - scroll with camera in both X and Y
-	if r.NumLanes > 1 {
-		centerLineWidth := 4.0
-		centerGap := 2.0
-		centerWorldX := 0.0 // Road center is at world X = 0
-		
-		// Draw center line segments
-		for worldY := worldYStart; worldY < worldYEnd; worldY += segmentHeight {
-			screenY := screenCenterY - (worldY - cameraY)
-			if screenY >= -segmentHeight && screenY < float64(height)+segmentHeight {
-				centerScreenX := screenCenterX - (centerWorldX - cameraX)
-				
-				// Top line (left side of center)
-				topLine := ebiten.NewImage(int(centerLineWidth), int(segmentHeight))
-				topLine.Fill(dividerColor)
-				topLineOp := &ebiten.DrawImageOptions{}
-				topLineOp.GeoM.Translate(centerScreenX-centerLineWidth/2-centerGap, screenY)
-				screen.DrawImage(topLine, topLineOp)
-				
-				// Bottom line (right side of center)
-				bottomLine := ebiten.NewImage(int(centerLineWidth), int(segmentHeight))
-				bottomLine.Fill(dividerColor)
-				bottomLineOp := &ebiten.DrawImageOptions{}
-				bottomLineOp.GeoM.Translate(centerScreenX+centerGap, screenY)
-				screen.DrawImage(bottomLine, bottomLineOp)
-			}
-		}
+	// No center divider for one-way highway
+}
+
+// SetNumLanes changes the number of lanes dynamically
+func (r *Road) SetNumLanes(numLanes int) {
+	if numLanes < 1 {
+		numLanes = 1
 	}
+	if numLanes > 9 {
+		numLanes = 9
+	}
+	r.NumLanes = numLanes
+	r.RoadWidth = float64(numLanes) * r.LaneWidth
 }
 
 // GetLaneCenterX returns the X coordinate of the center of a lane (0-indexed)
