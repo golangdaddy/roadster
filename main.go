@@ -4,6 +4,7 @@ import (
 	"image/color"
 	"log"
 
+	"github.com/golangdaddy/roadster/game"
 	"github.com/golangdaddy/roadster/models"
 	"github.com/golangdaddy/roadster/ui"
 	"github.com/hajimehoshi/ebiten/v2"
@@ -22,6 +23,7 @@ type Game struct {
 	state         GameState
 	loadingScreen *ui.LoadingScreen
 	gameState     *models.GameState
+	roadView      *game.RoadView
 }
 
 // Update proceeds the game state.
@@ -34,8 +36,10 @@ func (g *Game) Update() error {
 		}
 		return g.loadingScreen.Update()
 	case StateInGame:
-		// Game logic will go here
-		return nil
+		if g.roadView == nil {
+			g.roadView = game.NewRoadView(g.gameState)
+		}
+		return g.roadView.Update()
 	}
 	return nil
 }
@@ -49,16 +53,19 @@ func (g *Game) Draw(screen *ebiten.Image) {
 			g.loadingScreen.Draw(screen)
 		}
 	case StateInGame:
-		// Draw game world
-		screen.Fill(color.RGBA{30, 30, 40, 255})
-		// TODO: Draw game content
+		if g.roadView != nil {
+			g.roadView.Draw(screen)
+		} else {
+			// Fallback if road view not initialized
+			screen.Fill(color.RGBA{30, 30, 40, 255})
+		}
 	}
 }
 
 // Layout takes the outside size (e.g., the window size) and returns the (logical) screen size.
 // If you don't have to adjust the screen size with the outside size, just return a fixed size.
 func (g *Game) Layout(outsideWidth, outsideHeight int) (screenWidth, screenHeight int) {
-	return 640, 480
+	return 1024, 600
 }
 
 // onGameStart is called when a new game is started or loaded
@@ -73,8 +80,8 @@ func main() {
 	game := &Game{
 		state: StateLoadingScreen,
 	}
-	// Specify the window size as you like. Here, a doubled size is specified.
-	ebiten.SetWindowSize(640, 480)
+	// Specify the window size
+	ebiten.SetWindowSize(1024, 600)
 	ebiten.SetWindowTitle("Roadster")
 	// Call ebiten.RunGame to start your game loop.
 	if err := ebiten.RunGame(game); err != nil {

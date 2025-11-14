@@ -83,11 +83,11 @@ func (ls *LoadingScreen) Draw(screen *ebiten.Image) {
 	titleOp.ColorScale.ScaleWithColor(color.RGBA{255, 200, 50, 255})
 	text.Draw(screen, titleText, face, titleOp)
 	
-	// Menu options
-	buttonWidth := 200.0
-	buttonHeight := 40.0
+	// Menu options - adjusted for 1024x600 resolution
+	buttonWidth := 300.0
+	buttonHeight := 50.0
 	optionY := float64(height) / 2
-	optionSpacing := 60.0
+	optionSpacing := 80.0
 	buttonX := float64(width)/2 - buttonWidth/2
 	
 	// New Game button
@@ -108,8 +108,8 @@ func (ls *LoadingScreen) Draw(screen *ebiten.Image) {
 	}
 	drawButton(screen, "Load Game", buttonX, optionY+optionSpacing, buttonWidth, buttonHeight, loadGameBgColor, loadGameTextColor)
 	
-	// Instructions - centered horizontally
-	drawText(screen, "Arrow Keys: Navigate | Enter: Select", float64(width)/2, float64(height)-40, 16, color.RGBA{150, 150, 150, 255})
+	// Instructions - centered horizontally, adjusted for new resolution
+	drawText(screen, "Arrow Keys: Navigate | Enter: Select", float64(width)/2, float64(height)-50, 20, color.RGBA{150, 150, 150, 255})
 }
 
 // startNewGame creates a new game state
