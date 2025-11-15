@@ -367,7 +367,7 @@ func (rv *RoadView) Update() error {
 	return nil
 }
 
-// updateTrafficCars updates all traffic cars to move at their lane speed limits
+// updateTrafficCars updates all traffic cars to move at 5mph less than their lane speed limits
 func (rv *RoadView) updateTrafficCars(baseSpeedLimitMPH, speedPerLaneMPH, pxPerFramePerMPH float64) {
 	for i := range rv.trafficCars {
 		tc := &rv.trafficCars[i]
@@ -388,10 +388,17 @@ func (rv *RoadView) updateTrafficCars(baseSpeedLimitMPH, speedPerLaneMPH, pxPerF
 		
 		// Calculate speed limit for this lane
 		speedLimitMPH := baseSpeedLimitMPH + (float64(tc.Lane) * speedPerLaneMPH)
-		speedLimitPxPerFrame := speedLimitMPH * pxPerFramePerMPH
 		
-		// Traffic cars always move at their lane's speed limit
-		tc.Speed = speedLimitPxPerFrame
+		// Traffic cars move 5mph slower than the lane speed limit (more challenging)
+		trafficSpeedMPH := speedLimitMPH - 5.0
+		// Ensure speed doesn't go below 0
+		if trafficSpeedMPH < 0 {
+			trafficSpeedMPH = 0
+		}
+		trafficSpeedPxPerFrame := trafficSpeedMPH * pxPerFramePerMPH
+		
+		// Set traffic car speed
+		tc.Speed = trafficSpeedPxPerFrame
 		
 		// Update traffic car position (moves upward like player car)
 		tc.Y += tc.Speed
