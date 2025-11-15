@@ -34,6 +34,12 @@ type RoadView struct {
 	cameraX float64 // Camera X position in world space (centered on car)
 	cameraY float64 // Camera Y position in world space (follows car)
 	
+	// Speed transition tracking
+	transitionStartY    float64 // Y position when speed transition started
+	transitionStartSpeed float64 // Speed when transition started
+	transitionTargetSpeed float64 // Target speed for current transition
+	transitionSegmentLength float64 // Length of one road segment (600 pixels)
+	
 	// Callback for returning to garage
 	onReturnToGarage func()
 }
@@ -71,16 +77,20 @@ func NewRoadView(gameState *models.GameState, selectedCar *carmodel.Car, onRetur
 	}
 
 	return &RoadView{
-		gameState:        gameState,
-		road:             highway,
-		carModel:         carModel,
-		carX:             laneWidth / 2,   // Start in center of lane 0 (world X = LaneWidth/2)
-		carY:             0,   // Start at beginning of road (world Y = 0)
-		carAngle:         0,   // Facing straight up
-		carSpeed:         0,   // Stationary
-		cameraX:          laneWidth / 2,   // Camera starts at car position
-		cameraY:          0,
-		onReturnToGarage: onReturnToGarage,
+		gameState:              gameState,
+		road:                   highway,
+		carModel:               carModel,
+		carX:                   laneWidth / 2,   // Start in center of lane 0 (world X = LaneWidth/2)
+		carY:                   0,   // Start at beginning of road (world Y = 0)
+		carAngle:               0,   // Facing straight up
+		carSpeed:               0,   // Stationary
+		cameraX:                laneWidth / 2,   // Camera starts at car position
+		cameraY:                0,
+		transitionStartY:       -1,   // Sentinel value - no transition active
+		transitionStartSpeed:   0,
+		transitionTargetSpeed:  0,
+		transitionSegmentLength: segmentHeight, // One road segment = 600 pixels
+		onReturnToGarage:       onReturnToGarage,
 	}
 }
 
@@ -129,83 +139,158 @@ func (rv *RoadView) Update() error {
 	speedLimitMPH := baseSpeedLimitMPH + (float64(currentLane) * speedPerLaneMPH)
 	speedLimitPxPerFrame := speedLimitMPH * pxPerFramePerMPH
 	
-	// Debug: log lane info occasionally (every 60 frames = ~1 second at 60fps)
-	// This helps verify the system is working
-	if int(rv.totalDistance) % 60 == 0 {
-		log.Printf("Lane: %d, carX: %.1f, speedLimit: %.1f mph (%.2f px/frame), currentSpeed: %.2f px/frame",
-			currentLane+1, rv.carX, speedLimitMPH, speedLimitPxPerFrame, rv.carSpeed)
-	}
-
-	// Automatic speed adjustment to match lane speed limit
-	// Always apply this when car is within lane bounds, regardless of input
 	// Check if car is within the bounds of its current lane
 	laneLeftBound := float64(currentLane) * rv.road.LaneWidth
 	laneRightBound := float64(currentLane+1) * rv.road.LaneWidth
+	isWithinLaneBounds := rv.carX >= laneLeftBound && rv.carX < laneRightBound
 	
-	// Calculate speed difference to target
-	speedDifference := speedLimitPxPerFrame - rv.carSpeed
-	autoAccelRate := acceleration * 0.02 // Automatic acceleration rate
-	autoDecelRate := friction * 0.2      // Automatic deceleration rate
+	// Check if we need to start a new speed transition
+	// Start transition when entering a lane with a different speed limit
+	if isWithinLaneBounds {
+		// Check if target speed has changed (new lane or different speed limit)
+		if rv.transitionStartY < 0 || rv.transitionTargetSpeed != speedLimitPxPerFrame {
+			// Start a new transition
+			rv.transitionStartY = rv.carY
+			rv.transitionStartSpeed = rv.carSpeed
+			rv.transitionTargetSpeed = speedLimitPxPerFrame
+		}
+		
+		// Calculate transition progress (0.0 to 1.0 over one road segment)
+		distanceTraveled := rv.carY - rv.transitionStartY
+		transitionProgress := distanceTraveled / rv.transitionSegmentLength
+		
+		// Clamp progress to 0.0-1.0
+		if transitionProgress < 0.0 {
+			transitionProgress = 0.0
+		}
+		if transitionProgress > 1.0 {
+			transitionProgress = 1.0
+		}
+		
+		// Linear interpolation between start speed and target speed
+		// Only apply if we're actually transitioning (not already at target)
+		if rv.transitionStartSpeed != rv.transitionTargetSpeed {
+			// Calculate the transition target speed
+			targetTransitionSpeed := rv.transitionStartSpeed + (rv.transitionTargetSpeed - rv.transitionStartSpeed) * transitionProgress
+			
+			// Store the transition target so we can enforce it after manual input
+			// For deceleration, we need to ensure speed doesn't exceed transition target
+			// For acceleration, we set it directly (manual accel can add more)
+			if rv.transitionTargetSpeed < rv.transitionStartSpeed {
+				// Decelerating - set transition speed, will enforce max after manual input
+				rv.carSpeed = targetTransitionSpeed
+			} else {
+				// Accelerating - set to transition speed (manual accel can add more below)
+				rv.carSpeed = targetTransitionSpeed
+			}
+		} else {
+			// Already at target speed, just maintain it
+			rv.carSpeed = speedLimitPxPerFrame
+		}
+	} else {
+		// Outside lane bounds - reset transition tracking
+		rv.transitionStartY = -1
+	}
 	
-	// Apply automatic speed adjustment if within lane bounds
-	if rv.carX >= laneLeftBound && rv.carX < laneRightBound {
-		if speedDifference > 0.01 {
-			// Need to speed up - apply automatic acceleration
-			rv.carSpeed += autoAccelRate
+	// Check if we're in an active deceleration transition (needed for brake and friction checks)
+	isDeceleratingTransition := isWithinLaneBounds && rv.transitionStartY >= 0 && 
+		rv.transitionStartSpeed != rv.transitionTargetSpeed && 
+		rv.transitionTargetSpeed < rv.transitionStartSpeed
+	
+	// Manual acceleration forward (user input)
+	// This can add to transition speed for acceleration
+	// During deceleration transition, cap at transition speed, not final speed limit
+	if ebiten.IsKeyPressed(ebiten.KeyArrowUp) || ebiten.IsKeyPressed(ebiten.KeyW) {
+		rv.carSpeed += acceleration
+		// If in a deceleration transition, cap at transition speed, not final speed limit
+		if isDeceleratingTransition && rv.transitionStartY >= 0 {
+			distanceTraveled := rv.carY - rv.transitionStartY
+			transitionProgress := distanceTraveled / rv.transitionSegmentLength
+			if transitionProgress < 0.0 {
+				transitionProgress = 0.0
+			}
+			if transitionProgress > 1.0 {
+				transitionProgress = 1.0
+			}
+			targetTransitionSpeed := rv.transitionStartSpeed + (rv.transitionTargetSpeed - rv.transitionStartSpeed) * transitionProgress
+			if rv.carSpeed > targetTransitionSpeed {
+				rv.carSpeed = targetTransitionSpeed
+			}
+		} else {
+			// Normal case: cap at speed limit for current lane
 			if rv.carSpeed > speedLimitPxPerFrame {
 				rv.carSpeed = speedLimitPxPerFrame
 			}
-		} else if speedDifference < -0.01 {
-			// Need to slow down - apply automatic deceleration
-			rv.carSpeed -= autoDecelRate
-			if rv.carSpeed < speedLimitPxPerFrame {
-				rv.carSpeed = speedLimitPxPerFrame
-			}
-		}
-	}
-	
-	// Manual acceleration forward (user input)
-	if ebiten.IsKeyPressed(ebiten.KeyArrowUp) || ebiten.IsKeyPressed(ebiten.KeyW) {
-		rv.carSpeed += acceleration
-		// Cap at speed limit for current lane
-		if rv.carSpeed > speedLimitPxPerFrame {
-			rv.carSpeed = speedLimitPxPerFrame
 		}
 	}
 	
 	// Brake (down button) - use car's realistic brake deceleration method
 	// This calculates brake force based on car weight and braking efficiency
+	// Don't apply brake during an active deceleration transition (let transition handle it)
 	if ebiten.IsKeyPressed(ebiten.KeyArrowDown) || ebiten.IsKeyPressed(ebiten.KeyS) {
-		// Get brake coefficient from car model (based on weight and brake efficiency)
-		if rv.carSpeed > 0 {
-			// Get realistic brake coefficient from car model
-			brakeCoefficient := rv.carModel.GetBrakeDeceleration(rv.carSpeed)
-			// Apply brake force proportional to current speed
-			// new_speed = current_speed - (brake_coefficient * current_speed)
-			// This creates exponential decay, which is realistic for braking
-			brakeDeceleration := brakeCoefficient * rv.carSpeed
-			rv.carSpeed -= brakeDeceleration
-			if rv.carSpeed < 0 {
-				rv.carSpeed = 0
+		// Only apply brake if not in an active deceleration transition
+		if !isDeceleratingTransition {
+			// Get brake coefficient from car model (based on weight and brake efficiency)
+			if rv.carSpeed > 0 {
+				// Get realistic brake coefficient from car model
+				brakeCoefficient := rv.carModel.GetBrakeDeceleration(rv.carSpeed)
+				// Apply brake force proportional to current speed
+				// new_speed = current_speed - (brake_coefficient * current_speed)
+				// This creates exponential decay, which is realistic for braking
+				brakeDeceleration := brakeCoefficient * rv.carSpeed
+				rv.carSpeed -= brakeDeceleration
+				if rv.carSpeed < 0 {
+					rv.carSpeed = 0
+				}
 			}
+			// Don't allow reverse - brake only stops forward motion
 		}
-		// Don't allow reverse - brake only stops forward motion
 	}
 
 	// Natural deceleration (friction/drag) - only when no input and not at speed limit
-	if !ebiten.IsKeyPressed(ebiten.KeyArrowUp) && !ebiten.IsKeyPressed(ebiten.KeyW) &&
-		!ebiten.IsKeyPressed(ebiten.KeyArrowDown) && !ebiten.IsKeyPressed(ebiten.KeyS) {
-		// Only apply friction if we're above the speed limit (let automatic adjustment handle it otherwise)
-		if rv.carSpeed > speedLimitPxPerFrame {
-			rv.carSpeed -= friction
-			if rv.carSpeed < speedLimitPxPerFrame {
-				rv.carSpeed = speedLimitPxPerFrame
+	// NEVER apply friction during an active deceleration transition - it will fight the smooth transition
+	if !isDeceleratingTransition {
+		if !ebiten.IsKeyPressed(ebiten.KeyArrowUp) && !ebiten.IsKeyPressed(ebiten.KeyW) &&
+			!ebiten.IsKeyPressed(ebiten.KeyArrowDown) && !ebiten.IsKeyPressed(ebiten.KeyS) {
+			// Only apply friction if we're above the speed limit
+			if rv.carSpeed > speedLimitPxPerFrame {
+				rv.carSpeed -= friction
+				if rv.carSpeed < speedLimitPxPerFrame {
+					rv.carSpeed = speedLimitPxPerFrame
+				}
+			} else if rv.carSpeed > 0 && (rv.carX < laneLeftBound || rv.carX >= laneRightBound) {
+				// Only apply friction if outside lane bounds
+				rv.carSpeed -= friction
+				if rv.carSpeed < 0 {
+					rv.carSpeed = 0
+				}
 			}
-		} else if rv.carSpeed > 0 && (rv.carX < laneLeftBound || rv.carX >= laneRightBound) {
-			// Only apply friction if outside lane bounds
-			rv.carSpeed -= friction
-			if rv.carSpeed < 0 {
-				rv.carSpeed = 0
+		}
+	}
+	
+	// After ALL input processing, enforce transition speed for deceleration
+	// This ensures deceleration transition can't be overridden by ANY other system
+	// This must happen LAST to ensure nothing overrides the smooth transition
+	if isWithinLaneBounds && rv.transitionStartY >= 0 && rv.transitionStartSpeed != rv.transitionTargetSpeed {
+		if rv.transitionTargetSpeed < rv.transitionStartSpeed {
+			// Decelerating - calculate current transition target and enforce it as maximum
+			distanceTraveled := rv.carY - rv.transitionStartY
+			transitionProgress := distanceTraveled / rv.transitionSegmentLength
+			if transitionProgress < 0.0 {
+				transitionProgress = 0.0
+			}
+			if transitionProgress > 1.0 {
+				transitionProgress = 1.0
+			}
+			targetTransitionSpeed := rv.transitionStartSpeed + (rv.transitionTargetSpeed - rv.transitionStartSpeed) * transitionProgress
+			// ALWAYS enforce transition speed during deceleration - nothing should override this
+			// This ensures smooth deceleration over the full 600 pixel segment
+			if rv.carSpeed > targetTransitionSpeed {
+				rv.carSpeed = targetTransitionSpeed
+			}
+			// Also ensure we don't go below the transition target (shouldn't happen, but safety check)
+			if rv.carSpeed < targetTransitionSpeed && transitionProgress < 1.0 {
+				rv.carSpeed = targetTransitionSpeed
 			}
 		}
 	}
