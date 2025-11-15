@@ -90,9 +90,6 @@ func NewRoadView(gameState *models.GameState, selectedCar *carmodel.Car, onRetur
 		carModel.Brakes.Performance = 1.0
 	}
 
-	// Generate traffic cars
-	trafficCars := generateTrafficCars(highway, laneWidth, segmentHeight)
-
 	rv := &RoadView{
 		gameState:              gameState,
 		road:                   highway,
@@ -108,17 +105,47 @@ func NewRoadView(gameState *models.GameState, selectedCar *carmodel.Car, onRetur
 		transitionTargetSpeed:  0,
 		transitionSegmentLength: segmentHeight, // One road segment = 600 pixels
 		previousLane:           0,   // Start in lane 0
-		trafficCars:            trafficCars,
+		trafficCars:            []TrafficCar{},
 		onReturnToGarage:       onReturnToGarage,
 	}
 	
 	return rv
 }
 
-// generateTrafficCars creates traffic cars distributed across all lanes
-func generateTrafficCars(highway *road.Road, laneWidth, segmentHeight float64) []TrafficCar {
-	var trafficCars []TrafficCar
-	
+// getFurthestCarAheadInLane returns the Y position of the furthest car ahead in the lane
+// Returns -1 if no cars exist in the lane
+func (rv *RoadView) getFurthestCarAheadInLane(lane int, fromY float64) float64 {
+	furthestY := -1.0
+	for _, tc := range rv.trafficCars {
+		if tc.Lane == lane && tc.Y >= fromY {
+			if furthestY < 0 || tc.Y > furthestY {
+				furthestY = tc.Y
+			}
+		}
+	}
+	return furthestY
+}
+
+// hasCarTooCloseInLane checks if there's a car too close to the given Y position in the lane
+func (rv *RoadView) hasCarTooCloseInLane(lane int, checkY float64, minSpacing float64) bool {
+	for _, tc := range rv.trafficCars {
+		if tc.Lane == lane {
+			// Check distance in both directions (cars ahead and behind)
+			distance := checkY - tc.Y
+			if distance < 0 {
+				distance = -distance // Absolute distance
+			}
+			if distance < minSpacing {
+				return true // Too close to existing car
+			}
+		}
+	}
+	return false
+}
+
+// spawnTrafficForLane spawns a single traffic car for a lane if there's enough space
+// Returns true if a car was spawned, false otherwise
+func (rv *RoadView) spawnTrafficForLane(segment road.RoadSegment, lane int) bool {
 	// Traffic car colors (variety for visual distinction)
 	colors := []color.Color{
 		color.RGBA{200, 50, 50, 255},   // Red
@@ -129,48 +156,114 @@ func generateTrafficCars(highway *road.Road, laneWidth, segmentHeight float64) [
 		color.RGBA{150, 50, 150, 255}, // Purple
 	}
 	
-	// Generate traffic cars for each segment
-	// Space them out: one car per lane every 300-500 pixels
-	minSpacing := 300.0
-	maxSpacing := 500.0
+	// Minimum spacing: half a screen length (300 pixels)
+	height := 600.0
+	minSpacing := height / 2.0 // Half screen length
 	
-	for _, segment := range highway.Segments {
-		// Generate cars for each lane in this segment
-		for lane := 0; lane < segment.NumLanes; lane++ {
-			// Start generating cars from the start of the segment
-			currentY := segment.StartY
-			
-			// Generate cars throughout the segment
-			for currentY < segment.EndY {
-				// Random spacing variation
-				spacing := minSpacing + rand.Float64()*(maxSpacing-minSpacing)
-				currentY += spacing
-				
-				if currentY >= segment.EndY {
-					break
-				}
-				
-				// Calculate X position (center of lane)
-				carX := float64(lane)*laneWidth + laneWidth/2
-				
-				// Random color
-				colorIndex := rand.Intn(len(colors))
-				
-				// Create traffic car
-				trafficCar := TrafficCar{
-					X:     carX,
-					Y:     currentY,
-					Lane:  lane,
-					Speed: 0, // Will be set based on lane speed limit in Update
-					Color: colors[colorIndex],
-				}
-				
-				trafficCars = append(trafficCars, trafficCar)
-			}
+	// Calculate spawn range (ahead of player)
+	spawnAheadDistance := height * 2.0 // Spawn up to 2 screen heights ahead
+	minSpawnY := rv.cameraY
+	maxSpawnY := rv.cameraY + spawnAheadDistance
+	
+	// Clamp spawn range to segment bounds
+	if minSpawnY < segment.StartY {
+		minSpawnY = segment.StartY
+	}
+	if maxSpawnY > segment.EndY {
+		maxSpawnY = segment.EndY
+	}
+	
+	if minSpawnY >= maxSpawnY {
+		// No valid spawn range
+		return false
+	}
+	
+	// Find the furthest car ahead in this lane within the segment
+	furthestCarY := rv.getFurthestCarAheadInLane(lane, segment.StartY)
+	
+	// Determine where to spawn the next car
+	var nextSpawnY float64
+	
+	if furthestCarY < 0 {
+		// No cars in this lane yet - spawn at the start of the spawn range
+		nextSpawnY = minSpawnY
+	} else {
+		// Spawn ahead of the furthest car
+		nextSpawnY = furthestCarY + minSpacing
+		
+		// Make sure it's within the spawn range
+		if nextSpawnY < minSpawnY {
+			nextSpawnY = minSpawnY
+		}
+		if nextSpawnY > maxSpawnY {
+			// Too far ahead, don't spawn yet
+			return false
 		}
 	}
 	
-	return trafficCars
+	// Double-check: ensure there's no car too close at the spawn position
+	if rv.hasCarTooCloseInLane(lane, nextSpawnY, minSpacing) {
+		// Too close to existing car, don't spawn
+		return false
+	}
+	
+	// Calculate X position (center of lane) - ensure coordinates are correct
+	carX := float64(lane)*rv.road.LaneWidth + rv.road.LaneWidth/2
+	
+	// Random color
+	colorIndex := rand.Intn(len(colors))
+	
+	// Create traffic car with correct coordinates
+	trafficCar := TrafficCar{
+		X:     carX,
+		Y:     nextSpawnY,
+		Lane:  lane,
+		Speed: 0, // Will be set based on lane speed limit in Update
+		Color: colors[colorIndex],
+	}
+	
+	rv.trafficCars = append(rv.trafficCars, trafficCar)
+	
+	return true
+}
+
+// spawnTrafficForVisibleSegments spawns traffic cars for visible road segments
+// Each lane generates traffic independently and gradually
+// Only spawns a new car if there's at least half a screen length of space
+func (rv *RoadView) spawnTrafficForVisibleSegments() {
+	// Calculate visible world Y range (ahead of player)
+	// Spawn traffic ahead of the player, not behind
+	height := 600.0 // Window height
+	spawnAheadDistance := height * 2.0 // Spawn traffic up to 2 screen heights ahead
+	worldYStart := rv.cameraY
+	worldYEnd := rv.cameraY + spawnAheadDistance
+	
+	// Check each segment for visibility
+	for _, segment := range rv.road.Segments {
+		// Check if segment is visible and ahead of player
+		segmentVisible := !(segment.EndY < worldYStart || segment.StartY > worldYEnd)
+		if !segmentVisible {
+			continue
+		}
+		
+		// Handle each lane independently
+		// Each lane spawns cars gradually, one at a time, with proper spacing
+		for lane := 0; lane < segment.NumLanes; lane++ {
+			// Try to spawn one car for this lane (will only spawn if there's enough space)
+			rv.spawnTrafficForLane(segment, lane)
+		}
+	}
+	
+	// Clean up traffic cars that are far behind the player (to prevent memory issues)
+	cleanupDistance := height * 3.0 // Remove cars more than 3 screen heights behind
+	minY := rv.cameraY - cleanupDistance
+	var activeTraffic []TrafficCar
+	for _, tc := range rv.trafficCars {
+		if tc.Y >= minY {
+			activeTraffic = append(activeTraffic, tc)
+		}
+	}
+	rv.trafficCars = activeTraffic
 }
 
 // Update handles input and updates game state
@@ -354,6 +447,9 @@ func (rv *RoadView) Update() error {
 	// Car moves upward, so we increase carY (positive Y is up in world space)
 	rv.carY += rv.carSpeed
 	rv.totalDistance += rv.carSpeed // Track total distance traveled
+
+	// Spawn traffic for visible segments (dynamic spawning)
+	rv.spawnTrafficForVisibleSegments()
 
 	// Update traffic cars
 	rv.updateTrafficCars(baseSpeedLimitMPH, speedPerLaneMPH, pxPerFramePerMPH)
