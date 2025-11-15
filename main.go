@@ -6,6 +6,7 @@ import (
 
 	"github.com/golangdaddy/roadster/game"
 	"github.com/golangdaddy/roadster/models"
+	carmodel "github.com/golangdaddy/roadster/models/car"
 	"github.com/golangdaddy/roadster/ui"
 	"github.com/hajimehoshi/ebiten/v2"
 )
@@ -15,6 +16,7 @@ type GameState int
 
 const (
 	StateLoadingScreen GameState = iota
+	StateGarageScreen
 	StateInGame
 )
 
@@ -22,7 +24,9 @@ const (
 type Game struct {
 	state         GameState
 	loadingScreen *ui.LoadingScreen
+	garageScreen  *ui.GarageScreen
 	gameState     *models.GameState
+	selectedCar   *carmodel.Car
 	roadView      *game.RoadView
 }
 
@@ -32,14 +36,21 @@ func (g *Game) Update() error {
 	switch g.state {
 	case StateLoadingScreen:
 		if g.loadingScreen == nil {
-			g.loadingScreen = ui.NewLoadingScreen(g.onGameStart)
+			g.loadingScreen = ui.NewLoadingScreen(g.onNewGameClicked)
 		}
 		return g.loadingScreen.Update()
-	case StateInGame:
-		if g.roadView == nil {
-			g.roadView = game.NewRoadView(g.gameState)
+	case StateGarageScreen:
+		if g.garageScreen == nil {
+			g.garageScreen = ui.NewGarageScreen(g.onCarSelected)
 		}
-		return g.roadView.Update()
+		return g.garageScreen.Update()
+	case StateInGame:
+		if g.roadView == nil && g.selectedCar != nil {
+			g.roadView = game.NewRoadView(g.gameState, g.selectedCar, g.onReturnToGarage)
+		}
+		if g.roadView != nil {
+			return g.roadView.Update()
+		}
 	}
 	return nil
 }
@@ -51,6 +62,10 @@ func (g *Game) Draw(screen *ebiten.Image) {
 	case StateLoadingScreen:
 		if g.loadingScreen != nil {
 			g.loadingScreen.Draw(screen)
+		}
+	case StateGarageScreen:
+		if g.garageScreen != nil {
+			g.garageScreen.Draw(screen)
 		}
 	case StateInGame:
 		if g.roadView != nil {
@@ -68,15 +83,37 @@ func (g *Game) Layout(outsideWidth, outsideHeight int) (screenWidth, screenHeigh
 	return 1024, 600
 }
 
-// onGameStart is called when a new game is started or loaded
-func (g *Game) onGameStart(gameState *models.GameState) {
+// onNewGameClicked is called when "New Game" is clicked on loading screen
+func (g *Game) onNewGameClicked(gameState *models.GameState) {
 	g.gameState = gameState
-	g.state = StateInGame
-	log.Printf("Game started: %s (Player: %s, Level: %d)",
+	g.state = StateGarageScreen // Go to garage screen to select car
+	log.Printf("New game started: %s (Player: %s, Level: %d)",
 		gameState.SaveName, gameState.Player.Stats.Name, gameState.Player.Stats.Level)
 }
 
+// onCarSelected is called when a car is selected from the garage
+func (g *Game) onCarSelected(selectedCar *carmodel.Car) {
+	g.selectedCar = selectedCar
+	g.state = StateInGame
+	// Reset road view so it gets recreated with new car
+	g.roadView = nil
+	log.Printf("Car selected: %s %s (Weight: %.0f kg, Brake Eff: %.1f%%)",
+		selectedCar.Make, selectedCar.Model, selectedCar.Weight,
+		selectedCar.Brakes.Condition*selectedCar.Brakes.Performance*selectedCar.Brakes.StoppingPower*100)
+}
+
+// onReturnToGarage is called when Escape is pressed during gameplay
+func (g *Game) onReturnToGarage() {
+	g.state = StateGarageScreen
+	// Reset road view so it gets recreated when returning to game
+	g.roadView = nil
+	log.Printf("Returning to garage selection")
+}
+
 func main() {
+	// Initialize global car inventory
+	models.InitializeCarInventory()
+
 	game := &Game{
 		state: StateLoadingScreen,
 	}

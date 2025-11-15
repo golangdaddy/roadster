@@ -134,3 +134,46 @@ func (c *Car) UpdateCondition() {
 	// Average condition of all parts
 	c.Condition = (engineCond + brakeCond + wheelCond) / 3.0
 }
+
+// GetBrakeDeceleration calculates realistic brake deceleration based on car weight and braking efficiency
+// Returns the deceleration coefficient (0.0 to 1.0) that should be applied per frame
+// Physics: deceleration = (braking_efficiency × friction_coefficient × gravity) / (weight_factor)
+// For game purposes, we simplify to: deceleration_coefficient = base_coefficient × (braking_efficiency / weight_factor)
+func (c *Car) GetBrakeDeceleration(currentSpeed float64) float64 {
+	// Base brake coefficient (realistic value for good brakes at 60 FPS)
+	// This represents the maximum deceleration rate
+	// Reduced by 3x for softer, more gradual braking
+	baseBrakeCoefficient := 0.04 // ~4% per frame at 60 FPS for a well-braked car (3x softer)
+	
+	// Calculate braking efficiency
+	// Combines brake condition, brake performance, and stopping power
+	brakeEfficiency := c.Brakes.Condition * c.Brakes.Performance * c.Brakes.StoppingPower
+	
+	// Weight factor: heavier cars take longer to stop
+	// Typical car weight: 1000-2000 kg
+	// Normalize to a factor: lighter = faster braking, heavier = slower braking
+	// Use inverse relationship: lighter cars brake better
+	baseWeight := 1500.0 // Reference weight in kg (average car)
+	weightFactor := baseWeight / c.Weight // Lighter cars have higher factor (brake better)
+	if weightFactor > 1.5 {
+		weightFactor = 1.5 // Cap at 1.5x for very light cars
+	}
+	if weightFactor < 0.5 {
+		weightFactor = 0.5 // Cap at 0.5x for very heavy vehicles
+	}
+	
+	// Calculate final brake coefficient
+	// Formula: brake_coefficient = base × efficiency × weight_factor
+	brakeCoefficient := baseBrakeCoefficient * brakeEfficiency * weightFactor
+	
+	// Ensure it's within reasonable bounds (0.02 to 0.08)
+	// Adjusted for 3x softer braking globally
+	if brakeCoefficient < 0.02 {
+		brakeCoefficient = 0.02 // Minimum braking (very poor brakes)
+	}
+	if brakeCoefficient > 0.08 {
+		brakeCoefficient = 0.08 // Maximum braking (racing brakes)
+	}
+	
+	return brakeCoefficient
+}

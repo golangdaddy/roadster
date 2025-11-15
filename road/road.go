@@ -1,202 +1,287 @@
 package road
 
 import (
+	"bufio"
+	"fmt"
 	"image/color"
+	"os"
+	"strconv"
 
 	"github.com/hajimehoshi/ebiten/v2"
 )
 
-// Road represents a highway with configurable lanes
-type Road struct {
-	NumLanes      int     // Number of lanes
-	LaneWidth     float64 // Width of each lane in pixels
-	RoadWidth     float64 // Total road width
-	CenterLine    float64 // Y position of road center line
-	SegmentLength float64 // Length of road segments
+// RoadSegment represents a single segment of road with a specific number of lanes
+type RoadSegment struct {
+	NumLanes int     // Number of lanes in this segment
+	StartY   float64 // World Y position where this segment starts
+	EndY     float64 // World Y position where this segment ends
 }
 
-// NewRoad creates a new road with the specified number of lanes
-func NewRoad(numLanes int, laneWidth float64) *Road {
-	return &Road{
-		NumLanes:      numLanes,
-		LaneWidth:     laneWidth,
-		RoadWidth:     float64(numLanes) * laneWidth,
-		CenterLine:    0, // Will be set based on screen
-		SegmentLength:  100,
+// Road represents a highway made of segments loaded from a level file
+type Road struct {
+	Segments      []RoadSegment // All road segments
+	LaneWidth    float64       // Width of each lane in pixels
+	SegmentHeight float64      // Height of each segment (window height)
+}
+
+// LoadRoadFromFile loads a road from a level file
+// Each line contains an integer representing the number of lanes for that segment
+// Each segment is as long as the window height
+func LoadRoadFromFile(filename string, segmentHeight float64, laneWidth float64) (*Road, error) {
+	file, err := os.Open(filename)
+	if err != nil {
+		return nil, fmt.Errorf("failed to open level file: %w", err)
 	}
+	defer file.Close()
+
+	var segments []RoadSegment
+	currentY := 0.0
+
+	scanner := bufio.NewScanner(file)
+	for scanner.Scan() {
+		line := scanner.Text()
+		if line == "" {
+			continue
+		}
+
+		numLanes, err := strconv.Atoi(line)
+		if err != nil {
+			return nil, fmt.Errorf("invalid lane count '%s': %w", line, err)
+		}
+
+		if numLanes < 1 {
+			numLanes = 1
+		}
+
+		segment := RoadSegment{
+			NumLanes: numLanes,
+			StartY:   currentY,
+			EndY:     currentY + segmentHeight,
+		}
+		segments = append(segments, segment)
+
+		currentY += segmentHeight
+	}
+
+	if err := scanner.Err(); err != nil {
+		return nil, fmt.Errorf("error reading level file: %w", err)
+	}
+
+	return &Road{
+		Segments:      segments,
+		LaneWidth:     laneWidth,
+		SegmentHeight: segmentHeight,
+	}, nil
+}
+
+// GetSegmentAtY returns the road segment at the given world Y position
+func (r *Road) GetSegmentAtY(worldY float64) *RoadSegment {
+	for i := range r.Segments {
+		if worldY >= r.Segments[i].StartY && worldY < r.Segments[i].EndY {
+			return &r.Segments[i]
+		}
+	}
+	// If beyond all segments, return the last segment
+	if len(r.Segments) > 0 {
+		last := &r.Segments[len(r.Segments)-1]
+		if worldY >= last.StartY {
+			return last
+		}
+		// If before all segments, return the first
+		return &r.Segments[0]
+	}
+	return nil
+}
+
+// GetNumLanesAtY returns the number of lanes at the given world Y position
+func (r *Road) GetNumLanesAtY(worldY float64) int {
+	segment := r.GetSegmentAtY(worldY)
+	if segment == nil {
+		return 3 // Default
+	}
+	return segment.NumLanes
+}
+
+// GetRoadWidthAtY returns the total road width at the given world Y position
+func (r *Road) GetRoadWidthAtY(worldY float64) float64 {
+	return float64(r.GetNumLanesAtY(worldY)) * r.LaneWidth
 }
 
 // Draw renders the road on the screen
 // cameraX, cameraY are the world positions of the camera (car's position)
-// Road scrolls in both X and Y as the camera moves
 func (r *Road) Draw(screen *ebiten.Image, cameraX, cameraY float64) {
 	width, height := screen.Bounds().Dx(), screen.Bounds().Dy()
 	screenCenterX := float64(width) / 2
 	screenCenterY := float64(height) / 2
-	
-	// Road is centered at world position (0, 0), camera is at (cameraX, cameraY)
-	// Road scrolls in both X and Y as camera moves
-	
+
 	// Draw road background (dark gray)
 	screen.Fill(color.RGBA{40, 40, 40, 255})
-	
-	// Draw road surface (slightly lighter gray)
-	// Road extends infinitely, so we draw multiple segments that scroll in both X and Y
-	segmentHeight := 100.0 // Height of each road segment
-	segmentWidth := 100.0  // Width of each road segment
-	
-	// Draw road segments to cover visible area plus extra for scrolling
+
+	// Calculate visible world Y range
 	worldYStart := cameraY - float64(height)/2 - 100
 	worldYEnd := cameraY + float64(height)/2 + 100
-	worldXStart := cameraX - float64(width)/2 - 100
-	worldXEnd := cameraX + float64(width)/2 + 100
-	
-	// Draw road segments in a grid
-	for worldY := worldYStart; worldY < worldYEnd; worldY += segmentHeight {
-		for worldX := worldXStart; worldX < worldXEnd; worldX += segmentWidth {
-			// Convert world coordinates to screen coordinates
-			screenY := screenCenterY - (worldY - cameraY)
-			
-			// Only draw if segment is within road bounds and visible
-			segmentWorldLeft := worldX
-			segmentWorldRight := worldX + segmentWidth
-			roadWorldLeft := -r.RoadWidth / 2
-			roadWorldRight := r.RoadWidth / 2
-			
-			// Check if segment overlaps with road
-			if segmentWorldRight > roadWorldLeft && segmentWorldLeft < roadWorldRight {
-				// Calculate how much of this segment is on the road
-				segLeft := segmentWorldLeft
-				segRight := segmentWorldRight
-				if segLeft < roadWorldLeft {
-					segLeft = roadWorldLeft
-				}
-				if segRight > roadWorldRight {
-					segRight = roadWorldRight
-				}
-				
-				segScreenLeft := screenCenterX - (segLeft - cameraX)
-				segScreenRight := screenCenterX - (segRight - cameraX)
-				segScreenWidth := segScreenRight - segScreenLeft
-				
-				if segScreenWidth > 0 && screenY >= -segmentHeight && screenY < float64(height)+segmentHeight {
-					roadRect := ebiten.NewImage(int(segScreenWidth), int(segmentHeight))
-					roadRect.Fill(color.RGBA{60, 60, 60, 255})
-					roadOp := &ebiten.DrawImageOptions{}
-					roadOp.GeoM.Translate(segScreenLeft, screenY)
-					screen.DrawImage(roadRect, roadOp)
-				}
-			}
+
+	// Draw road segments that are visible
+	for _, segment := range r.Segments {
+		// Check if segment is visible
+		// Segment is visible if it overlaps with the visible range
+		// Note: segment.StartY < segment.EndY (start is behind, end is ahead)
+		// worldYStart < worldYEnd (start is behind, end is ahead)
+		segmentVisible := !(segment.EndY < worldYStart || segment.StartY > worldYEnd)
+		if !segmentVisible {
+			continue
 		}
-	}
-	
-	// Draw lane dividers (dashed yellow lines)
-	dividerColor := color.RGBA{255, 255, 0, 255}
-	dividerWidth := 2.0
-	dashLength := 20.0
-	dashGap := 15.0
-	
-	// Draw dividers between lanes - scroll in both X and Y
-	for i := 1; i < r.NumLanes; i++ {
-		// Lane divider is at world X = (i * laneWidth) - roadWidth/2 (relative to road center at 0)
-		laneDividerWorldX := float64(i)*r.LaneWidth - r.RoadWidth/2
-		
-		// Calculate world Y range to draw (around camera position)
-		worldYStart := cameraY - float64(height)/2 - 100
-		worldYEnd := cameraY + float64(height)/2 + 100
-		currentWorldY := worldYStart
-		
-		// Align dashes to a grid for consistent pattern
-		dashPatternLength := dashLength + dashGap
-		gridOffset := float64(int(currentWorldY) % int(dashPatternLength))
-		if gridOffset < 0 {
-			gridOffset += dashPatternLength
+
+		// Calculate segment bounds in world space
+		// Lane 0 starts at X=0, lanes extend to the right (positive X)
+		roadWidth := float64(segment.NumLanes) * r.LaneWidth
+		roadWorldLeft := 0.0  // Lane 0 starts at X=0
+		roadWorldRight := roadWidth  // Road extends to the right
+
+		// Convert segment bounds to screen coordinates
+		// World Y increases as car moves forward (toward top of screen)
+		// Screen Y increases downward (0 = top, height = bottom)
+		// Car is always at screen center (screenCenterY)
+		// Things ahead (higher worldY) should appear ABOVE the car (lower screenY)
+		// Things behind (lower worldY) should appear BELOW the car (higher screenY)
+		// Formula: screenY = screenCenterY - (worldY - cameraY)
+		// If worldY = cameraY: screenY = screenCenterY (car position) ✓
+		// If worldY > cameraY: screenY < screenCenterY (above car, ahead) ✓
+		// If worldY < cameraY: screenY > screenCenterY (below car, behind) ✓
+		segmentStartScreenY := screenCenterY - (segment.StartY - cameraY)
+		segmentEndScreenY := screenCenterY - (segment.EndY - cameraY)
+
+		// Ensure we draw from top to bottom
+		drawStartY := segmentStartScreenY
+		drawEndY := segmentEndScreenY
+		if drawStartY > drawEndY {
+			drawStartY, drawEndY = drawEndY, drawStartY
 		}
-		currentWorldY -= gridOffset
+
+		// Clamp to screen bounds
+		if drawStartY < 0 {
+			drawStartY = 0
+		}
+		if drawEndY > float64(height) {
+			drawEndY = float64(height)
+		}
+		if drawStartY >= drawEndY {
+			continue
+		}
+
+		// Convert road edges to screen coordinates
+		roadLeftScreenX := screenCenterX - (roadWorldLeft - cameraX)
+		roadRightScreenX := screenCenterX - (roadWorldRight - cameraX)
+
+		// Ensure left < right (handle coordinate system inversion)
+		if roadLeftScreenX > roadRightScreenX {
+			roadLeftScreenX, roadRightScreenX = roadRightScreenX, roadLeftScreenX
+		}
+
+		// Calculate dimensions
+		roadWidthPx := roadRightScreenX - roadLeftScreenX
+		roadHeightPx := drawEndY - drawStartY
 		
-		for currentWorldY < worldYEnd {
-			// Convert world coordinates to screen coordinates
+		// Only skip if dimensions are truly invalid
+		if roadWidthPx <= 0 || roadHeightPx <= 0 {
+			continue
+		}
+		
+		// Clamp road X coordinates to screen bounds if needed
+		drawLeftX := roadLeftScreenX
+		drawRightX := roadRightScreenX
+		if drawRightX < 0 || drawLeftX > float64(width) {
+			continue // Entirely off-screen horizontally
+		}
+		if drawLeftX < 0 {
+			drawLeftX = 0
+		}
+		if drawRightX > float64(width) {
+			drawRightX = float64(width)
+		}
+		roadWidthPx = drawRightX - drawLeftX
+		if roadWidthPx <= 0 {
+			continue
+		}
+
+		// Draw road surface (lighter gray)
+		roadColor := color.RGBA{60, 60, 60, 255}
+		// Ensure dimensions are valid integers before creating image
+		roadWidthInt := int(roadWidthPx)
+		roadHeightInt := int(roadHeightPx)
+		if roadWidthInt <= 0 || roadHeightInt <= 0 {
+			continue
+		}
+		roadRect := ebiten.NewImage(roadWidthInt, roadHeightInt)
+		roadRect.Fill(roadColor)
+		roadOp := &ebiten.DrawImageOptions{}
+		roadOp.GeoM.Translate(drawLeftX, drawStartY)
+		screen.DrawImage(roadRect, roadOp)
+
+		// Draw lane dividers
+		dividerColor := color.RGBA{255, 255, 0, 255} // Yellow
+		dividerWidth := 2.0
+		dividerDashLength := 20.0
+		dividerGapLength := 10.0
+
+		for lane := 1; lane < segment.NumLanes; lane++ {
+			// Calculate divider position in world space
+			// Lane 0 starts at X=0, so divider between lane N and N+1 is at X = N * LaneWidth
+			laneDividerWorldX := float64(lane) * r.LaneWidth
 			dividerScreenX := screenCenterX - (laneDividerWorldX - cameraX)
-			screenY := screenCenterY - (currentWorldY - cameraY)
-			
-			// Draw dash if it's visible on screen
-			if screenY >= -dashLength && screenY < float64(height)+dashLength &&
-				dividerScreenX >= -dividerWidth && dividerScreenX < float64(width)+dividerWidth {
-				dividerRect := ebiten.NewImage(int(dividerWidth), int(dashLength))
+
+			// Draw dashed line
+			currentY := drawStartY
+			for currentY < drawEndY {
+				// Draw dash
+				dashEndY := currentY + dividerDashLength
+				if dashEndY > drawEndY {
+					dashEndY = drawEndY
+				}
+				dashHeight := dashEndY - currentY
+				if dashHeight <= 0 {
+					break
+				}
+				// Ensure dimensions are valid before creating image
+				dividerWidthInt := int(dividerWidth)
+				dashHeightInt := int(dashHeight)
+				if dividerWidthInt <= 0 || dashHeightInt <= 0 {
+					break
+				}
+				dividerRect := ebiten.NewImage(dividerWidthInt, dashHeightInt)
 				dividerRect.Fill(dividerColor)
 				dividerOp := &ebiten.DrawImageOptions{}
-				dividerOp.GeoM.Translate(dividerScreenX-dividerWidth/2, screenY)
+				dividerOp.GeoM.Translate(dividerScreenX-dividerWidth/2, currentY)
 				screen.DrawImage(dividerRect, dividerOp)
+
+				// Move to next dash
+				currentY = dashEndY + dividerGapLength
 			}
-			currentWorldY += dashPatternLength
+		}
+
+		// Draw road edges
+		edgeColor := color.RGBA{255, 255, 255, 255} // White
+		edgeWidth := 3.0
+		edgeHeight := drawEndY - drawStartY
+		if edgeHeight > 0 {
+			// Ensure dimensions are valid integers
+			edgeWidthInt := int(edgeWidth)
+			edgeHeightInt := int(edgeHeight)
+			if edgeWidthInt > 0 && edgeHeightInt > 0 {
+				// Left edge
+				leftEdgeRect := ebiten.NewImage(edgeWidthInt, edgeHeightInt)
+				leftEdgeRect.Fill(edgeColor)
+				leftEdgeOp := &ebiten.DrawImageOptions{}
+				leftEdgeOp.GeoM.Translate(drawLeftX-edgeWidth/2, drawStartY)
+				screen.DrawImage(leftEdgeRect, leftEdgeOp)
+
+				// Right edge
+				rightEdgeRect := ebiten.NewImage(edgeWidthInt, edgeHeightInt)
+				rightEdgeRect.Fill(edgeColor)
+				rightEdgeOp := &ebiten.DrawImageOptions{}
+				rightEdgeOp.GeoM.Translate(drawRightX-edgeWidth/2, drawStartY)
+				screen.DrawImage(rightEdgeRect, rightEdgeOp)
+			}
 		}
 	}
-	
-	// Draw road edges (white lines) - scroll with camera in both X and Y
-	edgeColor := color.RGBA{255, 255, 255, 255}
-	edgeWidth := 3.0
-	leftEdgeWorldX := -r.RoadWidth / 2
-	rightEdgeWorldX := r.RoadWidth / 2
-	
-	// Draw edge segments
-	for worldY := worldYStart; worldY < worldYEnd; worldY += segmentHeight {
-		screenY := screenCenterY - (worldY - cameraY)
-		if screenY >= -segmentHeight && screenY < float64(height)+segmentHeight {
-			// Left edge
-			leftEdgeScreenX := screenCenterX - (leftEdgeWorldX - cameraX)
-			leftEdge := ebiten.NewImage(int(edgeWidth), int(segmentHeight))
-			leftEdge.Fill(edgeColor)
-			leftEdgeOp := &ebiten.DrawImageOptions{}
-			leftEdgeOp.GeoM.Translate(leftEdgeScreenX-edgeWidth, screenY)
-			screen.DrawImage(leftEdge, leftEdgeOp)
-			
-			// Right edge
-			rightEdgeScreenX := screenCenterX - (rightEdgeWorldX - cameraX)
-			rightEdge := ebiten.NewImage(int(edgeWidth), int(segmentHeight))
-			rightEdge.Fill(edgeColor)
-			rightEdgeOp := &ebiten.DrawImageOptions{}
-			rightEdgeOp.GeoM.Translate(rightEdgeScreenX, screenY)
-			screen.DrawImage(rightEdge, rightEdgeOp)
-		}
-	}
-	
-	// No center divider for one-way highway
 }
-
-// SetNumLanes changes the number of lanes dynamically
-func (r *Road) SetNumLanes(numLanes int) {
-	if numLanes < 1 {
-		numLanes = 1
-	}
-	if numLanes > 9 {
-		numLanes = 9
-	}
-	r.NumLanes = numLanes
-	r.RoadWidth = float64(numLanes) * r.LaneWidth
-}
-
-// GetLaneCenterX returns the X coordinate of the center of a lane (0-indexed)
-func (r *Road) GetLaneCenterX(laneIndex int, screenWidth int) float64 {
-	roadLeft := float64(screenWidth)/2 - r.RoadWidth/2
-	return roadLeft + float64(laneIndex)*r.LaneWidth + r.LaneWidth/2
-}
-
-// GetLaneIndex returns which lane a given X coordinate is in (-1 if off road)
-func (r *Road) GetLaneIndex(x float64, screenWidth int) int {
-	roadLeft := float64(screenWidth)/2 - r.RoadWidth/2
-	roadRight := float64(screenWidth)/2 + r.RoadWidth/2
-	
-	if x < roadLeft || x > roadRight {
-		return -1 // Off road
-	}
-	
-	relativeX := x - roadLeft
-	laneIndex := int(relativeX / r.LaneWidth)
-	
-	if laneIndex >= r.NumLanes {
-		return -1
-	}
-	
-	return laneIndex
-}
-
