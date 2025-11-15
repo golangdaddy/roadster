@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"image/color"
 	"log"
+	"math"
 	"math/rand"
 
 	"github.com/golangdaddy/roadster/car"
@@ -464,22 +465,28 @@ func (rv *RoadView) Update() error {
 }
 
 // updateTrafficCars updates all traffic cars to move at 5mph less than their lane speed limits
+// Removes cars when their lane disappears instead of collapsing them into lower lanes
 func (rv *RoadView) updateTrafficCars(baseSpeedLimitMPH, speedPerLaneMPH, pxPerFramePerMPH float64) {
+	var activeTraffic []TrafficCar
+	
 	for i := range rv.trafficCars {
-		tc := &rv.trafficCars[i]
+		tc := rv.trafficCars[i]
 		
 		// Get the road segment this traffic car is in
 		segment := rv.road.GetSegmentAtY(tc.Y)
 		if segment == nil {
+			// No segment found, remove this car
 			continue
 		}
 		
-		// Clamp lane to available lanes in this segment
+		// If the car's lane no longer exists, remove it instead of moving it
 		if tc.Lane >= segment.NumLanes {
-			tc.Lane = segment.NumLanes - 1
+			// Lane disappeared, remove this car
+			continue
 		}
 		if tc.Lane < 0 {
-			tc.Lane = 0
+			// Invalid lane, remove this car
+			continue
 		}
 		
 		// Calculate speed limit for this lane
@@ -501,15 +508,27 @@ func (rv *RoadView) updateTrafficCars(baseSpeedLimitMPH, speedPerLaneMPH, pxPerF
 		
 		// Keep traffic car centered in its lane
 		tc.X = float64(tc.Lane)*rv.road.LaneWidth + rv.road.LaneWidth/2
+		
+		// Add to active traffic list
+		activeTraffic = append(activeTraffic, tc)
 	}
+	
+	// Replace traffic cars list with only active ones
+	rv.trafficCars = activeTraffic
 }
 
 // Draw renders the road view
 func (rv *RoadView) Draw(screen *ebiten.Image) {
 	width, height := screen.Bounds().Dx(), screen.Bounds().Dy()
 
+	// Draw countryside background first (grass)
+	rv.drawCountrysideBackground(screen, width, height)
+
 	// Draw road (road scrolls in both X and Y as car moves)
 	rv.road.Draw(screen, rv.cameraX, rv.cameraY)
+
+	// Draw countryside elements (trees, water) on top of road but below traffic
+	rv.drawCountrysideElements(screen, width, height)
 
 	// Draw traffic cars
 	rv.drawTrafficCars(screen, width, height)
@@ -795,6 +814,185 @@ func (rv *RoadView) drawCarDetails(screen *ebiten.Image, width, height int) {
 	drawTextAt(screen, fmt.Sprintf("Fuel Level: %.1f%%", rv.carModel.FuelLevel*100), startX, currentY, 12, textColor, face)
 	currentY += lineHeight
 	drawTextAt(screen, fmt.Sprintf("Mileage: %.1f km", rv.carModel.Mileage), startX, currentY, 12, textColor, face)
+}
+
+// drawCountrysideBackground draws the grass background
+func (rv *RoadView) drawCountrysideBackground(screen *ebiten.Image, width, height int) {
+	// Fill entire screen with grass color
+	grassColor := color.RGBA{34, 139, 34, 255} // Forest green
+	screen.Fill(grassColor)
+}
+
+// hashFloat generates a deterministic pseudo-random float from a seed
+// Uses a more stable hash function to prevent glitching
+func hashFloat(seed int64) float64 {
+	// More stable hash function using multiple rounds
+	hash := uint64(seed)
+	// Multiple rounds for better distribution
+	for i := 0; i < 3; i++ {
+		hash ^= hash >> 33
+		hash *= 0xff51afd7ed558ccd
+		hash ^= hash >> 33
+		hash *= 0xc4ceb9fe1a85ec53
+		hash ^= hash >> 33
+	}
+	// Convert to float in range [0, 1) using only positive bits
+	return float64(hash&0x7FFFFFFF) / float64(0x7FFFFFFF)
+}
+
+// hashInt generates a deterministic pseudo-random int from a seed
+func hashInt(seed int64, max int) int {
+	if max <= 0 {
+		return 0
+	}
+	return int(hashFloat(seed) * float64(max))
+}
+
+// drawTree draws a simple tree at the given screen coordinates
+func drawTree(screen *ebiten.Image, x, y float64) {
+	// Trunk (brown rectangle)
+	trunkColor := color.RGBA{101, 67, 33, 255} // Brown
+	trunkWidth := 8.0
+	trunkHeight := 20.0
+	trunkRect := ebiten.NewImage(int(trunkWidth), int(trunkHeight))
+	trunkRect.Fill(trunkColor)
+	trunkOp := &ebiten.DrawImageOptions{}
+	trunkOp.GeoM.Translate(x-trunkWidth/2, y-trunkHeight)
+	screen.DrawImage(trunkRect, trunkOp)
+	
+	// Foliage (green circle - approximated as square)
+	foliageColor := color.RGBA{0, 100, 0, 255} // Dark green
+	foliageSize := 25.0
+	foliageRect := ebiten.NewImage(int(foliageSize), int(foliageSize))
+	foliageRect.Fill(foliageColor)
+	foliageOp := &ebiten.DrawImageOptions{}
+	foliageOp.GeoM.Translate(x-foliageSize/2, y-trunkHeight-foliageSize/2)
+	screen.DrawImage(foliageRect, foliageOp)
+}
+
+// drawCountrysideElements draws water patches and trees using deterministic pseudo-random generation
+// Uses quantized grid positions to prevent glitching
+func (rv *RoadView) drawCountrysideElements(screen *ebiten.Image, width, height int) {
+	screenCenterX := float64(width) / 2
+	screenCenterY := float64(height) / 2
+	
+	// Calculate visible world Y range with extra margin
+	worldYStart := rv.cameraY - float64(height)/2 - 200
+	worldYEnd := rv.cameraY + float64(height)/2 + 200
+	
+	// Grid spacing for scenery elements - use larger spacing and quantize positions
+	gridSpacing := 150.0
+	
+	// Quantize world Y to grid positions to ensure consistent generation
+	gridStartY := math.Floor(worldYStart/gridSpacing) * gridSpacing
+	gridEndY := math.Ceil(worldYEnd/gridSpacing) * gridSpacing
+	
+	// Draw scenery elements in a quantized grid pattern
+	for gridY := gridStartY; gridY <= gridEndY; gridY += gridSpacing {
+		// Use quantized grid Y as seed for completely deterministic generation
+		// Multiply by large number and convert to int64 for stable hash
+		seedY := int64(gridY * 100.0)
+		
+		// Check for water on left side
+		waterSeedLeft := seedY + 1000000
+		waterChance := hashFloat(waterSeedLeft)
+		if waterChance < 0.12 { // 12% chance of water
+			// Use deterministic offset from hash to prevent flickering
+			waterOffsetX := hashFloat(waterSeedLeft+1) * 30.0 - 15.0
+			waterOffsetY := hashFloat(waterSeedLeft+2) * 20.0 - 10.0
+			waterX := -150.0 + waterOffsetX // Left side of road with variation
+			waterY := gridY + waterOffsetY
+			
+			// Convert to screen coordinates
+			screenX := screenCenterX - (waterX - rv.cameraX)
+			screenY := screenCenterY - (waterY - rv.cameraY)
+			
+			// Draw water patch (blue rectangle) if visible
+			if screenX >= -100 && screenX <= float64(width)+100 &&
+				screenY >= -100 && screenY <= float64(height)+100 {
+				waterSize := 60.0 + hashFloat(waterSeedLeft+3)*20.0 // Vary size slightly
+				waterColor := color.RGBA{0, 100, 200, 255} // Blue
+				waterRect := ebiten.NewImage(int(waterSize), int(waterSize))
+				waterRect.Fill(waterColor)
+				waterOp := &ebiten.DrawImageOptions{}
+				waterOp.GeoM.Translate(screenX-waterSize/2, screenY-waterSize/2)
+				screen.DrawImage(waterRect, waterOp)
+			}
+		}
+		
+		// Check for water on right side
+		waterSeedRight := seedY + 2000000
+		waterChanceRight := hashFloat(waterSeedRight)
+		if waterChanceRight < 0.12 { // 12% chance of water
+			roadWidth := float64(rv.road.GetNumLanesAtY(gridY)) * rv.road.LaneWidth
+			waterOffsetX := hashFloat(waterSeedRight+1) * 30.0 - 15.0
+			waterOffsetY := hashFloat(waterSeedRight+2) * 20.0 - 10.0
+			waterX := roadWidth + 150.0 + waterOffsetX // Right side of road
+			waterY := gridY + waterOffsetY
+			
+			// Convert to screen coordinates
+			screenX := screenCenterX - (waterX - rv.cameraX)
+			screenY := screenCenterY - (waterY - rv.cameraY)
+			
+			// Draw water patch if visible
+			if screenX >= -100 && screenX <= float64(width)+100 &&
+				screenY >= -100 && screenY <= float64(height)+100 {
+				waterSize := 60.0 + hashFloat(waterSeedRight+3)*20.0
+				waterColor := color.RGBA{0, 100, 200, 255} // Blue
+				waterRect := ebiten.NewImage(int(waterSize), int(waterSize))
+				waterRect.Fill(waterColor)
+				waterOp := &ebiten.DrawImageOptions{}
+				waterOp.GeoM.Translate(screenX-waterSize/2, screenY-waterSize/2)
+				screen.DrawImage(waterRect, waterOp)
+			}
+		}
+		
+		// Draw trees on left side - use multiple trees per grid cell
+		for treeIdx := 0; treeIdx < 2; treeIdx++ {
+			treeSeedLeft := seedY + int64(3000000+treeIdx*100000)
+			treeChance := hashFloat(treeSeedLeft)
+			if treeChance < 0.25 { // 25% chance per tree slot
+				// Deterministic position based on seed
+				treeOffsetX := hashFloat(treeSeedLeft+10) * 60.0 - 30.0
+				treeOffsetY := hashFloat(treeSeedLeft+20) * gridSpacing * 0.8
+				treeX := -120.0 + treeOffsetX
+				treeY := gridY + treeOffsetY
+				
+				// Convert to screen coordinates
+				screenX := screenCenterX - (treeX - rv.cameraX)
+				screenY := screenCenterY - (treeY - rv.cameraY)
+				
+				// Draw tree if visible
+				if screenX >= -50 && screenX <= float64(width)+50 &&
+					screenY >= -50 && screenY <= float64(height)+50 {
+					drawTree(screen, screenX, screenY)
+				}
+			}
+		}
+		
+		// Draw trees on right side
+		for treeIdx := 0; treeIdx < 2; treeIdx++ {
+			treeSeedRight := seedY + int64(4000000+treeIdx*100000)
+			treeChance := hashFloat(treeSeedRight)
+			if treeChance < 0.25 { // 25% chance per tree slot
+				roadWidth := float64(rv.road.GetNumLanesAtY(gridY)) * rv.road.LaneWidth
+				treeOffsetX := hashFloat(treeSeedRight+10) * 60.0 - 30.0
+				treeOffsetY := hashFloat(treeSeedRight+20) * gridSpacing * 0.8
+				treeX := roadWidth + 120.0 + treeOffsetX
+				treeY := gridY + treeOffsetY
+				
+				// Convert to screen coordinates
+				screenX := screenCenterX - (treeX - rv.cameraX)
+				screenY := screenCenterY - (treeY - rv.cameraY)
+				
+				// Draw tree if visible
+				if screenX >= -50 && screenX <= float64(width)+50 &&
+					screenY >= -50 && screenY <= float64(height)+50 {
+					drawTree(screen, screenX, screenY)
+				}
+			}
+		}
+	}
 }
 
 // drawTextAt draws text at a specific position (helper function)
