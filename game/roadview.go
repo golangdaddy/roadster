@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"image/color"
 	"log"
+	"math/rand"
 
 	"github.com/golangdaddy/roadster/car"
 	"github.com/golangdaddy/roadster/models"
@@ -14,6 +15,15 @@ import (
 	"github.com/hajimehoshi/ebiten/v2/text/v2"
 	"github.com/hajimehoshi/bitmapfont/v4"
 )
+
+// TrafficCar represents a traffic vehicle on the road
+type TrafficCar struct {
+	X      float64 // World X position (center of lane)
+	Y      float64 // World Y position
+	Lane   int     // Lane index (0-based)
+	Speed  float64 // Speed in pixels per frame
+	Color  color.Color // Car color
+}
 
 // RoadView represents the main driving view
 type RoadView struct {
@@ -40,6 +50,9 @@ type RoadView struct {
 	transitionTargetSpeed float64 // Target speed for current transition
 	transitionSegmentLength float64 // Length of one road segment (600 pixels)
 	previousLane int // Track previous lane to detect lane changes
+	
+	// Traffic cars
+	trafficCars []TrafficCar // All traffic cars on the road
 	
 	// Callback for returning to garage
 	onReturnToGarage func()
@@ -77,7 +90,10 @@ func NewRoadView(gameState *models.GameState, selectedCar *carmodel.Car, onRetur
 		carModel.Brakes.Performance = 1.0
 	}
 
-	return &RoadView{
+	// Generate traffic cars
+	trafficCars := generateTrafficCars(highway, laneWidth, segmentHeight)
+
+	rv := &RoadView{
 		gameState:              gameState,
 		road:                   highway,
 		carModel:               carModel,
@@ -92,8 +108,69 @@ func NewRoadView(gameState *models.GameState, selectedCar *carmodel.Car, onRetur
 		transitionTargetSpeed:  0,
 		transitionSegmentLength: segmentHeight, // One road segment = 600 pixels
 		previousLane:           0,   // Start in lane 0
+		trafficCars:            trafficCars,
 		onReturnToGarage:       onReturnToGarage,
 	}
+	
+	return rv
+}
+
+// generateTrafficCars creates traffic cars distributed across all lanes
+func generateTrafficCars(highway *road.Road, laneWidth, segmentHeight float64) []TrafficCar {
+	var trafficCars []TrafficCar
+	
+	// Traffic car colors (variety for visual distinction)
+	colors := []color.Color{
+		color.RGBA{200, 50, 50, 255},   // Red
+		color.RGBA{50, 200, 50, 255},  // Green
+		color.RGBA{200, 200, 50, 255}, // Yellow
+		color.RGBA{200, 150, 50, 255}, // Orange
+		color.RGBA{150, 150, 200, 255}, // Light blue
+		color.RGBA{150, 50, 150, 255}, // Purple
+	}
+	
+	// Generate traffic cars for each segment
+	// Space them out: one car per lane every 300-500 pixels
+	minSpacing := 300.0
+	maxSpacing := 500.0
+	
+	for _, segment := range highway.Segments {
+		// Generate cars for each lane in this segment
+		for lane := 0; lane < segment.NumLanes; lane++ {
+			// Start generating cars from the start of the segment
+			currentY := segment.StartY
+			
+			// Generate cars throughout the segment
+			for currentY < segment.EndY {
+				// Random spacing variation
+				spacing := minSpacing + rand.Float64()*(maxSpacing-minSpacing)
+				currentY += spacing
+				
+				if currentY >= segment.EndY {
+					break
+				}
+				
+				// Calculate X position (center of lane)
+				carX := float64(lane)*laneWidth + laneWidth/2
+				
+				// Random color
+				colorIndex := rand.Intn(len(colors))
+				
+				// Create traffic car
+				trafficCar := TrafficCar{
+					X:     carX,
+					Y:     currentY,
+					Lane:  lane,
+					Speed: 0, // Will be set based on lane speed limit in Update
+					Color: colors[colorIndex],
+				}
+				
+				trafficCars = append(trafficCars, trafficCar)
+			}
+		}
+	}
+	
+	return trafficCars
 }
 
 // Update handles input and updates game state
@@ -278,6 +355,9 @@ func (rv *RoadView) Update() error {
 	rv.carY += rv.carSpeed
 	rv.totalDistance += rv.carSpeed // Track total distance traveled
 
+	// Update traffic cars
+	rv.updateTrafficCars(baseSpeedLimitMPH, speedPerLaneMPH, pxPerFramePerMPH)
+
 	// Update camera to follow car - camera stays fixed above car position
 	// Camera doesn't rotate, just follows the car's world position
 	// Camera X and Y track the car's world position
@@ -287,12 +367,49 @@ func (rv *RoadView) Update() error {
 	return nil
 }
 
+// updateTrafficCars updates all traffic cars to move at their lane speed limits
+func (rv *RoadView) updateTrafficCars(baseSpeedLimitMPH, speedPerLaneMPH, pxPerFramePerMPH float64) {
+	for i := range rv.trafficCars {
+		tc := &rv.trafficCars[i]
+		
+		// Get the road segment this traffic car is in
+		segment := rv.road.GetSegmentAtY(tc.Y)
+		if segment == nil {
+			continue
+		}
+		
+		// Clamp lane to available lanes in this segment
+		if tc.Lane >= segment.NumLanes {
+			tc.Lane = segment.NumLanes - 1
+		}
+		if tc.Lane < 0 {
+			tc.Lane = 0
+		}
+		
+		// Calculate speed limit for this lane
+		speedLimitMPH := baseSpeedLimitMPH + (float64(tc.Lane) * speedPerLaneMPH)
+		speedLimitPxPerFrame := speedLimitMPH * pxPerFramePerMPH
+		
+		// Traffic cars always move at their lane's speed limit
+		tc.Speed = speedLimitPxPerFrame
+		
+		// Update traffic car position (moves upward like player car)
+		tc.Y += tc.Speed
+		
+		// Keep traffic car centered in its lane
+		tc.X = float64(tc.Lane)*rv.road.LaneWidth + rv.road.LaneWidth/2
+	}
+}
+
 // Draw renders the road view
 func (rv *RoadView) Draw(screen *ebiten.Image) {
 	width, height := screen.Bounds().Dx(), screen.Bounds().Dy()
 
 	// Draw road (road scrolls in both X and Y as car moves)
 	rv.road.Draw(screen, rv.cameraX, rv.cameraY)
+
+	// Draw traffic cars
+	rv.drawTrafficCars(screen, width, height)
 
 	// Draw car - car is always centered on screen (camera follows car)
 	carScreenX := float64(width) / 2  // Car always centered horizontally
@@ -309,6 +426,30 @@ func (rv *RoadView) Draw(screen *ebiten.Image) {
 	
 	// Draw detailed car stats breakdown
 	rv.drawCarDetails(screen, width, height)
+}
+
+// drawTrafficCars renders all traffic cars on screen
+func (rv *RoadView) drawTrafficCars(screen *ebiten.Image, width, height int) {
+	// Convert world coordinates to screen coordinates
+	// Match the coordinate system used by the road drawing:
+	// - X: screenX = screenCenterX - (worldX - cameraX)
+	// - Y: screenY = screenCenterY - (worldY - cameraY) [inverted because world Y increases upward, screen Y increases downward]
+	screenCenterX := float64(width) / 2
+	screenCenterY := float64(height) / 2
+	
+	for _, tc := range rv.trafficCars {
+		// Convert world coordinates to screen coordinates (matching road coordinate system)
+		screenX := screenCenterX - (tc.X - rv.cameraX)
+		screenY := screenCenterY - (tc.Y - rv.cameraY)
+		
+		// Only draw if traffic car is visible on screen (with some margin)
+		margin := 100.0
+		if screenX >= -margin && screenX <= float64(width)+margin &&
+			screenY >= -margin && screenY <= float64(height)+margin {
+			// Render traffic car (facing straight up, no angle)
+			car.RenderCar(screen, screenX, screenY, 0, tc.Color)
+		}
+	}
 }
 
 // drawControlLabels draws labels showing which way is forward, backward, left, and right
