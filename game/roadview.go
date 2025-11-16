@@ -293,8 +293,8 @@ func (rv *RoadView) spawnTrafficForLane(segment road.RoadSegment, lane int, dire
 		return false
 	}
 
-	// Calculate X position (center of lane) - ensure coordinates are correct
-	carX := float64(lane)*rv.road.LaneWidth + rv.road.LaneWidth/2
+	// Calculate X position (center of lane) - account for P lane shifting
+	carX := rv.road.GetLaneCenterX(lane, nextSpawnY)
 
 	// Random color
 	colorIndex := rand.Intn(len(colors))
@@ -392,19 +392,34 @@ func (rv *RoadView) Update() error {
 	speedPerLaneMPH := 10.0        // Additional speed per lane
 	pxPerFramePerMPH := 8.0 / 60.0 // Conversion: 60 mph = 8.0 px/frame
 
-	// Calculate which lane the car is in (0-indexed, where 0 = Lane 1)
-	// Lane 0 starts at X=0, so carX / LaneWidth gives us the lane index
-	currentLane := int(rv.carX / rv.road.LaneWidth)
-	if currentLane < 0 {
-		currentLane = 0
-	}
-
-	// Get current road segment to know how many lanes are available
+	// Calculate which lane the car is in (0-indexed)
+	// If segment has P lane: Lane 0 (P) at X=-LaneWidth, Lane 1 (first normal) at X=0, Lane 2 at X=LaneWidth, etc.
+	// If no P lane: Lane 0 at X=0, Lane 1 at X=LaneWidth, etc.
 	currentSegment := rv.road.GetSegmentAtY(rv.carY)
 	if currentSegment == nil {
-		// Fallback if no segment found
 		currentSegment = &road.RoadSegment{NumLanes: 3}
 	}
+
+	var currentLane int
+	if currentSegment.HasPetrolStationLane {
+		// P lane is at X=-LaneWidth, normal lanes start at X=0
+		if rv.carX < 0 {
+			// Car is in P lane (lane 0)
+			currentLane = 0
+		} else {
+			// Car is in normal lanes (lane 1, 2, 3, ...)
+			// Normal lane 0 is at X=0, so lane index = (carX / LaneWidth) + 1
+			currentLane = int(rv.carX/rv.road.LaneWidth) + 1
+		}
+	} else {
+		// No P lane - standard lane calculation
+		currentLane = int(rv.carX / rv.road.LaneWidth)
+		if currentLane < 0 {
+			currentLane = 0
+		}
+	}
+
+	// currentSegment already retrieved above
 
 	// Clamp lane to available lanes
 	if currentLane >= currentSegment.NumLanes {
@@ -413,7 +428,12 @@ func (rv *RoadView) Update() error {
 
 	// Calculate speed limit for current lane (Lane 1 = 60 mph, Lane 2 = 70 mph, etc.)
 	// Lane index 0 = Lane 1 = 60 mph, Lane index 1 = Lane 2 = 70 mph
+	// Exception: If this segment has a petrol station lane, lane 0 is 40mph
 	speedLimitMPH := baseSpeedLimitMPH + (float64(currentLane) * speedPerLaneMPH)
+	if currentSegment.HasPetrolStationLane && currentLane == 0 {
+		// Petrol station lane (lane 0) is always 40mph
+		speedLimitMPH = 40.0
+	}
 	speedLimitPxPerFrame := speedLimitMPH * pxPerFramePerMPH
 
 	// Check if player is braking (used to pause cruise control)
@@ -769,7 +789,12 @@ func (rv *RoadView) updateTrafficCars(baseSpeedLimitMPH, speedPerLaneMPH, pxPerF
 		}
 
 		// Calculate speed limit for this lane
+		// Exception: If this segment has a petrol station lane, lane 0 is 40mph
 		speedLimitMPH := baseSpeedLimitMPH + (float64(tc.Lane) * speedPerLaneMPH)
+		if segment.HasPetrolStationLane && tc.Lane == 0 {
+			// Petrol station lane (lane 0) is always 40mph
+			speedLimitMPH = 40.0
+		}
 
 		// Traffic cars move 5mph slower than the lane speed limit (more challenging)
 		// But stop if out of fuel
@@ -792,8 +817,8 @@ func (rv *RoadView) updateTrafficCars(baseSpeedLimitMPH, speedPerLaneMPH, pxPerF
 			tc.Y += tc.Speed
 		}
 
-		// Keep traffic car centered in its lane
-		tc.X = float64(tc.Lane)*rv.road.LaneWidth + rv.road.LaneWidth/2
+		// Keep traffic car centered in its lane (account for P lane shifting)
+		tc.X = rv.road.GetLaneCenterX(tc.Lane, tc.Y)
 
 		// Add to active traffic list
 		activeTraffic = append(activeTraffic, tc)
@@ -933,20 +958,36 @@ func (rv *RoadView) drawSpeedometer(screen *ebiten.Image, width, height int) {
 		rv.carModel.Make, rv.carModel.Model, rv.carModel.Weight, brakeEfficiency*100)
 
 	// Calculate current lane and speed limit for display
-	currentLane := int(rv.carX / rv.road.LaneWidth)
-	if currentLane < 0 {
-		currentLane = 0
-	}
 	currentSegment := rv.road.GetSegmentAtY(rv.carY)
 	if currentSegment == nil {
 		currentSegment = &road.RoadSegment{NumLanes: 3}
 	}
+
+	var currentLane int
+	if currentSegment.HasPetrolStationLane {
+		// P lane is at X=-LaneWidth, normal lanes start at X=0
+		if rv.carX < 0 {
+			currentLane = 0
+		} else {
+			currentLane = int(rv.carX/rv.road.LaneWidth) + 1
+		}
+	} else {
+		currentLane = int(rv.carX / rv.road.LaneWidth)
+		if currentLane < 0 {
+			currentLane = 0
+		}
+	}
+
 	if currentLane >= currentSegment.NumLanes {
 		currentLane = currentSegment.NumLanes - 1
 	}
 	baseSpeedLimitMPH := 60.0
 	speedPerLaneMPH := 10.0
 	speedLimitMPH := baseSpeedLimitMPH + (float64(currentLane) * speedPerLaneMPH)
+	// Exception: If this segment has a petrol station lane, lane 0 is 40mph
+	if currentSegment.HasPetrolStationLane && currentLane == 0 {
+		speedLimitMPH = 40.0
+	}
 	speedLimitText := fmt.Sprintf("LANE: %d | LIMIT: %.0f mph", currentLane+1, speedLimitMPH)
 
 	// Draw speedometer in top-right corner

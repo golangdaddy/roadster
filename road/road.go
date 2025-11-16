@@ -12,9 +12,10 @@ import (
 
 // RoadSegment represents a single segment of road with a specific number of lanes
 type RoadSegment struct {
-	NumLanes int     // Number of lanes in this segment
-	StartY   float64 // World Y position where this segment starts
-	EndY     float64 // World Y position where this segment ends
+	NumLanes           int     // Number of lanes in this segment (includes petrol station lane if present)
+	StartY             float64 // World Y position where this segment starts
+	EndY               float64 // World Y position where this segment ends
+	HasPetrolStationLane bool  // Whether this segment has a petrol station lane (40mph) on the right (lane 0)
 }
 
 // Road represents a highway made of segments loaded from a level file
@@ -44,7 +45,15 @@ func LoadRoadFromFile(filename string, segmentHeight float64, laneWidth float64)
 			continue
 		}
 
-		numLanes, err := strconv.Atoi(line)
+		// Check for 'P' suffix indicating petrol station lane
+		hasPetrolStation := false
+		laneStr := line
+		if len(line) > 0 && line[len(line)-1] == 'P' {
+			hasPetrolStation = true
+			laneStr = line[:len(line)-1] // Remove 'P' suffix
+		}
+
+		numLanes, err := strconv.Atoi(laneStr)
 		if err != nil {
 			return nil, fmt.Errorf("invalid lane count '%s': %w", line, err)
 		}
@@ -53,10 +62,17 @@ func LoadRoadFromFile(filename string, segmentHeight float64, laneWidth float64)
 			numLanes = 1
 		}
 
+		// If petrol station lane is present, add one extra lane (the petrol station lane)
+		// The petrol station lane will be lane 0 (rightmost/starting lane)
+		if hasPetrolStation {
+			numLanes++ // Add the petrol station lane
+		}
+
 		segment := RoadSegment{
-			NumLanes: numLanes,
-			StartY:   currentY,
-			EndY:     currentY + segmentHeight,
+			NumLanes:            numLanes,
+			StartY:              currentY,
+			EndY:                currentY + segmentHeight,
+			HasPetrolStationLane: hasPetrolStation,
 		}
 		segments = append(segments, segment)
 
@@ -107,6 +123,35 @@ func (r *Road) GetRoadWidthAtY(worldY float64) float64 {
 	return float64(r.GetNumLanesAtY(worldY)) * r.LaneWidth
 }
 
+// GetLaneCenterX returns the world X coordinate of the center of the given lane
+// Accounts for petrol station lane on the left side
+func (r *Road) GetLaneCenterX(lane int, worldY float64) float64 {
+	segment := r.GetSegmentAtY(worldY)
+	if segment == nil {
+		return float64(lane)*r.LaneWidth + r.LaneWidth/2
+	}
+	
+	// If segment has a petrol station lane:
+	// - P lane (lane 0) is at X=-LaneWidth (to the left of normal lanes)
+	// - Normal lane 0 (lane 1) is at X=0
+	// - Normal lane 1 (lane 2) is at X=LaneWidth
+	// - Normal lane 2 (lane 3) is at X=2*LaneWidth, etc.
+	if segment.HasPetrolStationLane {
+		if lane == 0 {
+			// P lane is at X=-LaneWidth (left side)
+			return -r.LaneWidth + r.LaneWidth/2
+		}
+		// Normal lanes are at their standard positions, but lane index is offset by 1
+		// Lane 1 (first normal) is at X=0, Lane 2 (second normal) is at X=LaneWidth, etc.
+		normalLaneIndex := lane - 1 // Convert to normal lane index (0, 1, 2, ...)
+		return float64(normalLaneIndex)*r.LaneWidth + r.LaneWidth/2
+	}
+	
+	// Standard lane positioning (no P lane)
+	// Lane 0 at X=0, Lane 1 at X=LaneWidth, etc.
+	return float64(lane)*r.LaneWidth + r.LaneWidth/2
+}
+
 // Draw renders the road on the screen
 // cameraX, cameraY are the world positions of the camera (car's position)
 func (r *Road) Draw(screen *ebiten.Image, cameraX, cameraY float64) {
@@ -133,10 +178,16 @@ func (r *Road) Draw(screen *ebiten.Image, cameraX, cameraY float64) {
 		}
 
 		// Calculate segment bounds in world space
-		// Lane 0 starts at X=0, lanes extend to the right (positive X)
-		roadWidth := float64(segment.NumLanes) * r.LaneWidth
-		roadWorldLeft := 0.0  // Lane 0 starts at X=0
-		roadWorldRight := roadWidth  // Road extends to the right
+		// Normal lanes always at fixed positions: X=0, X=LaneWidth, X=2*LaneWidth, etc.
+		// If segment has P lane, it's added on the left at X=-LaneWidth
+		normalLaneCount := segment.NumLanes
+		if segment.HasPetrolStationLane {
+			normalLaneCount = segment.NumLanes - 1 // Exclude P lane from normal count
+		}
+		
+		// Normal road extends from X=0 to X=normalLaneCount*LaneWidth
+		roadWorldLeft := 0.0
+		roadWorldRight := float64(normalLaneCount) * r.LaneWidth
 
 		// Convert segment bounds to screen coordinates
 		// World Y increases as car moves forward (toward top of screen)
@@ -206,6 +257,42 @@ func (r *Road) Draw(screen *ebiten.Image, cameraX, cameraY float64) {
 
 		// Draw road surface (lighter gray)
 		roadColor := color.RGBA{60, 60, 60, 255}
+		
+		// If segment has P lane, draw it separately on the left at X=-LaneWidth
+		if segment.HasPetrolStationLane {
+			// Draw P lane at X=-LaneWidth (left side, opposite to normal lanes)
+			pLaneWorldLeft := -r.LaneWidth
+			pLaneWorldRight := 0.0
+			pLaneLeftScreenX := screenCenterX - (pLaneWorldLeft - cameraX)
+			pLaneRightScreenX := screenCenterX - (pLaneWorldRight - cameraX)
+			
+			// Ensure left < right
+			if pLaneLeftScreenX > pLaneRightScreenX {
+				pLaneLeftScreenX, pLaneRightScreenX = pLaneRightScreenX, pLaneLeftScreenX
+			}
+			
+			// Clamp to screen
+			if pLaneRightScreenX > 0 && pLaneLeftScreenX < float64(width) {
+				pLaneDrawLeftX := pLaneLeftScreenX
+				if pLaneDrawLeftX < 0 {
+					pLaneDrawLeftX = 0
+				}
+				pLaneDrawRightX := pLaneRightScreenX
+				if pLaneDrawRightX > float64(width) {
+					pLaneDrawRightX = float64(width)
+				}
+				pLaneDrawWidth := pLaneDrawRightX - pLaneDrawLeftX
+				if pLaneDrawWidth > 0 && roadHeightPx > 0 {
+					pLaneRect := ebiten.NewImage(int(pLaneDrawWidth), int(roadHeightPx))
+					pLaneRect.Fill(roadColor)
+					pLaneOp := &ebiten.DrawImageOptions{}
+					pLaneOp.GeoM.Translate(pLaneDrawLeftX, drawStartY)
+					screen.DrawImage(pLaneRect, pLaneOp)
+				}
+			}
+		}
+		
+		// Draw normal road surface (always at X=0 and beyond, regardless of P lane)
 		// Ensure dimensions are valid integers before creating image
 		roadWidthInt := int(roadWidthPx)
 		roadHeightInt := int(roadHeightPx)
@@ -224,10 +311,59 @@ func (r *Road) Draw(screen *ebiten.Image, cameraX, cameraY float64) {
 		dividerDashLength := 20.0
 		dividerGapLength := 10.0
 
-		for lane := 1; lane < segment.NumLanes; lane++ {
+		// Draw dividers between lanes
+		// If segment has P lane: divider between P lane (0) and first normal lane (1) at X=0
+		// Then dividers between normal lanes at X=LaneWidth, 2*LaneWidth, etc.
+		// If no P lane: dividers at X=LaneWidth, 2*LaneWidth, etc.
+		if segment.HasPetrolStationLane {
+			// Draw divider between P lane (0) and first normal lane (1) at X=0
+			laneDividerWorldX := 0.0
+			dividerScreenX := screenCenterX - (laneDividerWorldX - cameraX)
+			
+			// Draw dashed line for P lane divider
+			currentY := drawStartY
+			for currentY < drawEndY {
+				dashEndY := currentY + dividerDashLength
+				if dashEndY > drawEndY {
+					dashEndY = drawEndY
+				}
+				dashHeight := dashEndY - currentY
+				if dashHeight <= 0 {
+					break
+				}
+				dividerWidthInt := int(dividerWidth)
+				dashHeightInt := int(dashHeight)
+				if dividerWidthInt <= 0 || dashHeightInt <= 0 {
+					break
+				}
+				dividerRect := ebiten.NewImage(dividerWidthInt, dashHeightInt)
+				dividerRect.Fill(dividerColor)
+				dividerOp := &ebiten.DrawImageOptions{}
+				dividerOp.GeoM.Translate(dividerScreenX-dividerWidth/2, currentY)
+				screen.DrawImage(dividerRect, dividerOp)
+				currentY = dashEndY + dividerGapLength
+			}
+		}
+
+		// Draw dividers between normal lanes (always at X=LaneWidth, 2*LaneWidth, etc.)
+		// Normal lanes start at lane 1 if P lane exists, or lane 0 if no P lane
+		normalLaneStart := 1
+		if segment.HasPetrolStationLane {
+			normalLaneStart = 2 // Skip P lane (0) and first normal lane divider (already drawn)
+		} else {
+			normalLaneStart = 1 // Start from lane 1 divider
+		}
+		
+		for lane := normalLaneStart; lane < segment.NumLanes; lane++ {
 			// Calculate divider position in world space
-			// Lane 0 starts at X=0, so divider between lane N and N+1 is at X = N * LaneWidth
-			laneDividerWorldX := float64(lane) * r.LaneWidth
+			// For normal lanes: divider between normal lane N and N+1 is at X = (N+1) * LaneWidth
+			// But we need to account for P lane offset
+			normalLaneIndex := lane
+			if segment.HasPetrolStationLane {
+				normalLaneIndex = lane - 1 // Convert to normal lane index (P lane is lane 0)
+			}
+			// Divider between normal lane N and N+1 is at X = (N+1) * LaneWidth
+			laneDividerWorldX := float64(normalLaneIndex) * r.LaneWidth
 			dividerScreenX := screenCenterX - (laneDividerWorldX - cameraX)
 
 			// Draw dashed line
@@ -268,12 +404,25 @@ func (r *Road) Draw(screen *ebiten.Image, cameraX, cameraY float64) {
 			edgeWidthInt := int(edgeWidth)
 			edgeHeightInt := int(edgeHeight)
 			if edgeWidthInt > 0 && edgeHeightInt > 0 {
-				// Left edge
+				// Left edge of normal road (at X=0)
 				leftEdgeRect := ebiten.NewImage(edgeWidthInt, edgeHeightInt)
 				leftEdgeRect.Fill(edgeColor)
 				leftEdgeOp := &ebiten.DrawImageOptions{}
 				leftEdgeOp.GeoM.Translate(drawLeftX-edgeWidth/2, drawStartY)
 				screen.DrawImage(leftEdgeRect, leftEdgeOp)
+				
+				// If segment has P lane, also draw left edge of P lane at X=-LaneWidth
+				if segment.HasPetrolStationLane {
+					pLaneLeftWorldX := -r.LaneWidth
+					pLaneLeftScreenX := screenCenterX - (pLaneLeftWorldX - cameraX)
+					if pLaneLeftScreenX >= -edgeWidth && pLaneLeftScreenX <= float64(width) {
+						pLaneLeftEdgeRect := ebiten.NewImage(edgeWidthInt, edgeHeightInt)
+						pLaneLeftEdgeRect.Fill(edgeColor)
+						pLaneLeftEdgeOp := &ebiten.DrawImageOptions{}
+						pLaneLeftEdgeOp.GeoM.Translate(pLaneLeftScreenX-edgeWidth/2, drawStartY)
+						screen.DrawImage(pLaneLeftEdgeRect, pLaneLeftEdgeOp)
+					}
+				}
 
 				// Right edge
 				rightEdgeRect := ebiten.NewImage(edgeWidthInt, edgeHeightInt)
