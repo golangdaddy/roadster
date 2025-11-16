@@ -8,6 +8,7 @@ import (
 	"math/rand"
 
 	"github.com/golangdaddy/roadster/car"
+	"github.com/golangdaddy/roadster/lanecontroller"
 	"github.com/golangdaddy/roadster/models"
 	carmodel "github.com/golangdaddy/roadster/models/car"
 	"github.com/golangdaddy/roadster/road"
@@ -35,6 +36,9 @@ type RoadView struct {
 	road      *road.Road
 	carModel  *carmodel.Car // Car model with weight, brakes, etc.
 
+	// Lane controllers - one for each lane, managed by level file
+	laneControllers []*lanecontroller.LaneController
+
 	// Car position and state (in world coordinates)
 	carX     float64 // X position in world (horizontal - free movement)
 	carY     float64 // Y position in world (vertical - distance traveled)
@@ -55,8 +59,8 @@ type RoadView struct {
 	transitionSegmentLength float64 // Length of one road segment (600 pixels)
 	previousLane            int     // Track previous lane to detect lane changes
 
-	// Traffic cars
-	trafficCars []TrafficCar   // All traffic cars on the road
+	// Traffic cars (legacy - now managed by lane controllers)
+	trafficCars []TrafficCar   // All traffic cars on the road (for compatibility)
 	passedCars  map[int64]bool // Track which cars have been passed (by unique ID)
 	carsAhead   map[int64]bool // Track which cars were initially ahead of player (for XP tracking)
 	nextCarID   int64          // Next unique ID for traffic cars
@@ -81,6 +85,15 @@ func NewRoadView(gameState *models.GameState, selectedCar *carmodel.Car, onRetur
 			LaneWidth:     laneWidth,
 			SegmentHeight: segmentHeight,
 		}
+	}
+
+	// Load lane controllers from level file
+	laneControllers, err := lanecontroller.LoadLaneControllersFromFile("levels/1.level", segmentHeight, laneWidth)
+	if err != nil {
+		log.Printf("Failed to load lane controllers: %v", err)
+		laneControllers = []*lanecontroller.LaneController{}
+	} else {
+		log.Printf("Loaded %d lane controllers", len(laneControllers))
 	}
 
 	// Car starts in center of lane 0
@@ -109,6 +122,7 @@ func NewRoadView(gameState *models.GameState, selectedCar *carmodel.Car, onRetur
 		gameState:               gameState,
 		road:                    highway,
 		carModel:                carModel,
+		laneControllers:         laneControllers,
 		carX:                    laneWidth / 2, // Start in center of lane 0 (world X = LaneWidth/2)
 		carY:                    0,             // Start at beginning of road (world Y = 0)
 		carAngle:                0,             // Facing straight up
@@ -583,10 +597,16 @@ func (rv *RoadView) Update() error {
 		rv.carSpeed = 0
 	}
 
+	// Check each next road segment and update lane controller sprites
+	rv.updateLaneControllerSprites()
+
 	// Spawn traffic for visible segments (dynamic spawning)
 	rv.spawnTrafficForVisibleSegments()
 
-	// Update traffic cars
+	// Update traffic cars in lane controllers
+	rv.updateLaneControllerTraffic(baseSpeedLimitMPH, speedPerLaneMPH, pxPerFramePerMPH)
+
+	// Update legacy traffic cars (for compatibility)
 	rv.updateTrafficCars(baseSpeedLimitMPH, speedPerLaneMPH, pxPerFramePerMPH)
 
 	// Check for cars passed and award XP
@@ -835,13 +855,16 @@ func (rv *RoadView) Draw(screen *ebiten.Image) {
 	// Draw countryside background first (grass)
 	rv.drawCountrysideBackground(screen, width, height)
 
-	// Draw road (road scrolls in both X and Y as car moves)
-	rv.road.Draw(screen, rv.cameraX, rv.cameraY)
+	// Draw lanes using lane controllers
+	rv.drawLaneControllers(screen, width, height)
 
 	// Draw countryside elements (trees, water) on top of road but below traffic
 	rv.drawCountrysideElements(screen, width, height)
 
-	// Draw traffic cars
+	// Draw traffic cars from lane controllers
+	rv.drawLaneControllerTraffic(screen, width, height)
+
+	// Draw legacy traffic cars (for compatibility)
 	rv.drawTrafficCars(screen, width, height)
 
 	// Draw car - car is always centered on screen (camera follows car)
