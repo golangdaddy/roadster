@@ -57,6 +57,7 @@ type Car struct {
 	// Additional Attributes
 	Color        string  // Car color
 	FuelLevel    float64 // Current fuel level (0.0 to 1.0)
+	FuelCapacity float64 // Fuel tank capacity in liters
 	Mileage      float64 // Total distance traveled in km
 	Condition    float64 // Overall car condition (0.0 to 1.0)
 	Price        float64 // Car price in currency
@@ -99,6 +100,7 @@ func NewCar(make, model string, year int) *Car {
 		},
 		Color:        "white",
 		FuelLevel:    1.0,
+		FuelCapacity: 50.0, // Default 50 liters
 		Condition:    1.0,
 		Transmission: "automatic",
 		DriveType:    "FWD",
@@ -142,8 +144,8 @@ func (c *Car) UpdateCondition() {
 func (c *Car) GetBrakeDeceleration(currentSpeed float64) float64 {
 	// Base brake coefficient (realistic value for good brakes at 60 FPS)
 	// This represents the maximum deceleration rate
-	// Reduced by 3x for softer, more gradual braking
-	baseBrakeCoefficient := 0.04 // ~4% per frame at 60 FPS for a well-braked car (3x softer)
+	// Reduced by 3x for softer, more gradual braking, then halved again for 2x softer braking
+	baseBrakeCoefficient := 0.02 // ~2% per frame at 60 FPS for a well-braked car (6x softer total)
 	
 	// Calculate braking efficiency
 	// Combines brake condition, brake performance, and stopping power
@@ -166,13 +168,13 @@ func (c *Car) GetBrakeDeceleration(currentSpeed float64) float64 {
 	// Formula: brake_coefficient = base × efficiency × weight_factor
 	brakeCoefficient := baseBrakeCoefficient * brakeEfficiency * weightFactor
 	
-	// Ensure it's within reasonable bounds (0.02 to 0.08)
-	// Adjusted for 3x softer braking globally
-	if brakeCoefficient < 0.02 {
-		brakeCoefficient = 0.02 // Minimum braking (very poor brakes)
+	// Ensure it's within reasonable bounds (0.01 to 0.04)
+	// Adjusted for 6x softer braking globally (3x + 2x softer)
+	if brakeCoefficient < 0.01 {
+		brakeCoefficient = 0.01 // Minimum braking (very poor brakes)
 	}
-	if brakeCoefficient > 0.08 {
-		brakeCoefficient = 0.08 // Maximum braking (racing brakes)
+	if brakeCoefficient > 0.04 {
+		brakeCoefficient = 0.04 // Maximum braking (racing brakes)
 	}
 	
 	return brakeCoefficient

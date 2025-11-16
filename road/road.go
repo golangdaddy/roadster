@@ -114,8 +114,8 @@ func (r *Road) Draw(screen *ebiten.Image, cameraX, cameraY float64) {
 	screenCenterX := float64(width) / 2
 	screenCenterY := float64(height) / 2
 
-	// Draw road background (dark gray)
-	screen.Fill(color.RGBA{40, 40, 40, 255})
+	// Don't fill entire screen - let countryside background show through
+	// Road surface will be drawn per segment below
 
 	// Calculate visible world Y range
 	worldYStart := cameraY - float64(height)/2 - 100

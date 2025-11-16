@@ -26,6 +26,7 @@ func InitializeCarInventory() {
 	sportsCar.Engine.Torque = 361
 	sportsCar.Engine.Displacement = 4.9
 	sportsCar.Engine.FuelEfficiency = 18.0
+	sportsCar.FuelCapacity = 80.0 // Sports car with larger tank
 	sportsCar.Brakes.StoppingPower = 1.2 // Excellent brakes
 	sportsCar.Brakes.Condition = 1.0
 	sportsCar.Brakes.Performance = 1.0
@@ -49,6 +50,7 @@ func InitializeCarInventory() {
 	sedan.Engine.Torque = 184
 	sedan.Engine.Displacement = 2.5
 	sedan.Engine.FuelEfficiency = 32.0
+	sedan.FuelCapacity = 60.0 // Standard sedan tank
 	sedan.Brakes.StoppingPower = 1.0 // Good brakes
 	sedan.Brakes.Condition = 1.0
 	sedan.Brakes.Performance = 1.0
@@ -72,6 +74,7 @@ func InitializeCarInventory() {
 	truck.Engine.Torque = 500
 	truck.Engine.Displacement = 5.0
 	truck.Engine.FuelEfficiency = 22.0
+	truck.FuelCapacity = 90.0 // Large truck tank
 	truck.Brakes.StoppingPower = 0.9 // Decent brakes
 	truck.Brakes.Condition = 1.0
 	truck.Brakes.Performance = 1.0
@@ -95,6 +98,7 @@ func InitializeCarInventory() {
 	raceCar.Engine.Torque = 479
 	raceCar.Engine.Displacement = 6.1
 	raceCar.Engine.FuelEfficiency = 12.0
+	raceCar.FuelCapacity = 70.0 // Race car tank
 	raceCar.Brakes.StoppingPower = 1.5 // Racing brakes
 	raceCar.Brakes.Condition = 1.0
 	raceCar.Brakes.Performance = 1.0
@@ -118,6 +122,7 @@ func InitializeCarInventory() {
 	oldCar.Engine.Torque = 360
 	oldCar.Engine.Displacement = 5.7
 	oldCar.Engine.FuelEfficiency = 15.0
+	oldCar.FuelCapacity = 70.0 // Classic car tank
 	oldCar.Brakes.StoppingPower = 0.6 // Worn brakes
 	oldCar.Brakes.Condition = 0.5 // Poor condition
 	oldCar.Brakes.Performance = 0.7 // Reduced performance

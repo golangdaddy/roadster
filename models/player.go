@@ -48,7 +48,7 @@ func NewPlayer(name string) *Player {
 			Name:            name,
 			Level:           1,
 			XP:              0,
-			XPToNext:        100,
+			XPToNext:        200, // 2x slower progression (was 100)
 			Money:           10000.0, // Starting money
 			RacesWon:        0,
 			RacesLost:       0,
@@ -83,6 +83,10 @@ func (p *Player) LevelUp() {
 	p.Stats.XP -= p.Stats.XPToNext
 	p.Stats.Level++
 	p.Stats.XPToNext = int(float64(p.Stats.XPToNext) * 1.5) // Exponential growth
+	// Safety check: ensure XPToNext is never 0 or negative
+	if p.Stats.XPToNext <= 0 {
+		p.Stats.XPToNext = 200 // Default minimum (2x slower progression)
+	}
 }
 
 // AddMoney adds currency to the player

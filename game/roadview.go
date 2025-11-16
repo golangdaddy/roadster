@@ -19,11 +19,14 @@ import (
 
 // TrafficCar represents a traffic vehicle on the road
 type TrafficCar struct {
-	X     float64     // World X position (center of lane)
-	Y     float64     // World Y position
-	Lane  int         // Lane index (0-based)
-	Speed float64     // Speed in pixels per frame
-	Color color.Color // Car color
+	X            float64     // World X position (center of lane)
+	Y            float64     // World Y position
+	Lane         int         // Lane index (0-based)
+	Speed        float64     // Speed in pixels per frame
+	Color        color.Color // Car color
+	ID           int64       // Unique identifier for tracking passed status
+	FuelLevel    float64     // Current fuel level (0.0 to 1.0)
+	FuelCapacity float64     // Fuel tank capacity in liters
 }
 
 // RoadView represents the main driving view
@@ -53,7 +56,10 @@ type RoadView struct {
 	previousLane            int     // Track previous lane to detect lane changes
 
 	// Traffic cars
-	trafficCars []TrafficCar // All traffic cars on the road
+	trafficCars []TrafficCar   // All traffic cars on the road
+	passedCars  map[int64]bool // Track which cars have been passed (by unique ID)
+	carsAhead   map[int64]bool // Track which cars were initially ahead of player (for XP tracking)
+	nextCarID   int64          // Next unique ID for traffic cars
 
 	// Callback for returning to garage
 	onReturnToGarage func()
@@ -91,6 +97,14 @@ func NewRoadView(gameState *models.GameState, selectedCar *carmodel.Car, onRetur
 		carModel.Brakes.Performance = 1.0
 	}
 
+	// Set starting fuel to 3 liters
+	if carModel != nil && carModel.FuelCapacity > 0 {
+		carModel.FuelLevel = 3.0 / carModel.FuelCapacity // 3 liters
+		if carModel.FuelLevel > 1.0 {
+			carModel.FuelLevel = 1.0 // Cap at full tank
+		}
+	}
+
 	rv := &RoadView{
 		gameState:               gameState,
 		road:                    highway,
@@ -107,6 +121,9 @@ func NewRoadView(gameState *models.GameState, selectedCar *carmodel.Car, onRetur
 		transitionSegmentLength: segmentHeight, // One road segment = 600 pixels
 		previousLane:            0,             // Start in lane 0
 		trafficCars:             []TrafficCar{},
+		passedCars:              make(map[int64]bool),
+		carsAhead:               make(map[int64]bool),
+		nextCarID:               1,
 		onReturnToGarage:        onReturnToGarage,
 	}
 
@@ -208,8 +225,12 @@ func (rv *RoadView) spawnTrafficForLane(segment road.RoadSegment, lane int, dire
 			// No cars in this lane yet - spawn at the start of the spawn range
 			nextSpawnY = minSpawnY
 		} else {
-			// Spawn ahead of the furthest car
-			nextSpawnY = furthestCarY + minSpacing
+			// Spawn ahead of the furthest car with slight random variation in spacing
+			// Use deterministic hash based on nextCarID and lane for consistent variation
+			spacingSeed := rv.nextCarID*1000 + int64(lane)*100 + int64(furthestCarY)
+			spacingVariation := 0.7 + hashFloat(spacingSeed)*0.6 // 70% to 130% of base spacing
+			actualSpacing := minSpacing * spacingVariation
+			nextSpawnY = furthestCarY + actualSpacing
 
 			// Make sure it's within the spawn range
 			if nextSpawnY < minSpawnY {
@@ -246,8 +267,12 @@ func (rv *RoadView) spawnTrafficForLane(segment road.RoadSegment, lane int, dire
 			// No cars in this lane yet - spawn at the end of the spawn range (furthest behind)
 			nextSpawnY = maxSpawnY
 		} else {
-			// Spawn behind the closest car (further back)
-			nextSpawnY = closestCarY - minSpacing
+			// Spawn behind the closest car (further back) with slight random variation in spacing
+			// Use deterministic hash based on nextCarID and lane for consistent variation
+			spacingSeed := rv.nextCarID*1000 + int64(lane)*100 + int64(closestCarY)
+			spacingVariation := 0.7 + hashFloat(spacingSeed)*0.6 // 70% to 130% of base spacing
+			actualSpacing := minSpacing * spacingVariation
+			nextSpawnY = closestCarY - actualSpacing
 
 			// Make sure it's within the spawn range
 			if nextSpawnY > maxSpawnY {
@@ -261,7 +286,9 @@ func (rv *RoadView) spawnTrafficForLane(segment road.RoadSegment, lane int, dire
 	}
 
 	// Double-check: ensure there's no car too close at the spawn position
-	if rv.hasCarTooCloseInLane(lane, nextSpawnY, minSpacing) {
+	// Use slightly reduced spacing for the check to account for variation
+	checkSpacing := minSpacing * 0.7 // Minimum spacing check (70% of base)
+	if rv.hasCarTooCloseInLane(lane, nextSpawnY, checkSpacing) {
 		// Too close to existing car, don't spawn
 		return false
 	}
@@ -272,14 +299,20 @@ func (rv *RoadView) spawnTrafficForLane(segment road.RoadSegment, lane int, dire
 	// Random color
 	colorIndex := rand.Intn(len(colors))
 
-	// Create traffic car with correct coordinates
+	// Create traffic car with correct coordinates and unique ID
+	// Traffic cars start with random fuel levels (30-100%)
+	initialFuelLevel := 0.3 + hashFloat(int64(rv.nextCarID))*0.7 // 30-100%
 	trafficCar := TrafficCar{
-		X:     carX,
-		Y:     nextSpawnY,
-		Lane:  lane,
-		Speed: 0, // Will be set based on lane speed limit in Update
-		Color: colors[colorIndex],
+		X:            carX,
+		Y:            nextSpawnY,
+		Lane:         lane,
+		Speed:        0, // Will be set based on lane speed limit in Update
+		Color:        colors[colorIndex],
+		ID:           rv.nextCarID,
+		FuelLevel:    initialFuelLevel,
+		FuelCapacity: 50.0, // Default 50 liters for traffic cars
 	}
+	rv.nextCarID++
 
 	rv.trafficCars = append(rv.trafficCars, trafficCar)
 
@@ -517,14 +550,27 @@ func (rv *RoadView) Update() error {
 
 	// Update car Y position (distance traveled upward)
 	// Car moves upward, so we increase carY (positive Y is up in world space)
-	rv.carY += rv.carSpeed
-	rv.totalDistance += rv.carSpeed // Track total distance traveled
+	// Only move if car has fuel
+	if rv.carModel != nil && rv.carModel.FuelLevel > 0 {
+		rv.carY += rv.carSpeed
+		rv.totalDistance += rv.carSpeed // Track total distance traveled
+
+		// Consume fuel based on distance traveled (1 liter per 100 road units)
+		// Faster lanes consume more fuel per unit distance
+		rv.consumePlayerFuel(rv.carSpeed, currentLane)
+	} else {
+		// Out of fuel - stop the car
+		rv.carSpeed = 0
+	}
 
 	// Spawn traffic for visible segments (dynamic spawning)
 	rv.spawnTrafficForVisibleSegments()
 
 	// Update traffic cars
 	rv.updateTrafficCars(baseSpeedLimitMPH, speedPerLaneMPH, pxPerFramePerMPH)
+
+	// Check for cars passed and award XP
+	rv.checkCarsPassed()
 
 	// Check for collisions with traffic cars
 	if rv.checkCollisionWithTraffic() {
@@ -592,12 +638,91 @@ func (rv *RoadView) restart() {
 	rv.transitionTargetSpeed = 0
 	rv.previousLane = 0
 
-	// Clear all traffic cars
+	// Refill player car fuel to 3 liters
+	if rv.carModel != nil && rv.carModel.FuelCapacity > 0 {
+		rv.carModel.FuelLevel = 3.0 / rv.carModel.FuelCapacity // 3 liters
+		if rv.carModel.FuelLevel > 1.0 {
+			rv.carModel.FuelLevel = 1.0 // Cap at full tank
+		}
+	}
+
+	// Clear all traffic cars and passed tracking
 	rv.trafficCars = []TrafficCar{}
+	rv.passedCars = make(map[int64]bool)
+	rv.carsAhead = make(map[int64]bool)
+	rv.nextCarID = 1
+}
+
+// checkCarsPassed checks if player has passed any traffic cars and awards XP
+// Awards exactly 1 XP per car passed, once per car (tracked by unique car ID)
+// Only awards XP for cars that were initially ahead of the player (overtaking)
+func (rv *RoadView) checkCarsPassed() {
+	if rv.gameState == nil || rv.gameState.Player == nil {
+		return
+	}
+
+	// Check each traffic car
+	for _, tc := range rv.trafficCars {
+		// Skip if already processed (prevents duplicate XP awards)
+		if rv.passedCars[tc.ID] {
+			continue
+		}
+
+		// Track cars that are ahead of the player when first seen
+		// Only award XP when the player overtakes a car that was initially ahead
+		if tc.Y > rv.carY {
+			// Car is currently ahead of player - mark it as "ahead" for future tracking
+			rv.carsAhead[tc.ID] = true
+			continue
+		}
+
+		// Car is now behind player (rv.carY > tc.Y)
+		// Only award XP if this car was initially ahead when first seen
+		// Cars that spawn behind the player should not award XP
+		if rv.carsAhead[tc.ID] {
+			// This car was ahead when first seen, and now player has passed it - award XP
+			rv.passedCars[tc.ID] = true
+			rv.gameState.Player.AddXP(1)
+		} else {
+			// Car was behind when first seen (spawned behind) - don't award XP, just mark as processed
+			rv.passedCars[tc.ID] = true
+		}
+	}
+}
+
+// consumePlayerFuel consumes fuel based on distance traveled
+// 1 liter per 100 road units (where 1 road unit = 600 pixels = 60,000 pixels per liter)
+// Faster lanes consume more fuel per unit distance
+func (rv *RoadView) consumePlayerFuel(distanceTraveled float64, currentLane int) {
+	if rv.carModel == nil || rv.carModel.FuelLevel <= 0 || rv.carModel.FuelCapacity <= 0 {
+		return
+	}
+
+	// Base consumption: 1 liter per 100 road units = 1 liter per 60,000 pixels
+	// Each road unit is 600 pixels, so 100 units = 60,000 pixels
+	const pixelsPerRoadUnit = 600.0
+	const roadUnitsPerLiter = 100.0
+	const pixelsPerLiter = roadUnitsPerLiter * pixelsPerRoadUnit // 60,000 pixels
+
+	litersConsumed := distanceTraveled / pixelsPerLiter
+
+	// Faster lanes consume more fuel (20% more per lane)
+	speedMultiplier := 1.0 + (float64(currentLane) * 0.2) // 20% more per lane
+	litersConsumed *= speedMultiplier
+
+	// Convert liters to fuel level (0.0 to 1.0)
+	fuelConsumed := litersConsumed / rv.carModel.FuelCapacity
+
+	// Consume fuel
+	rv.carModel.FuelLevel -= fuelConsumed
+	if rv.carModel.FuelLevel < 0 {
+		rv.carModel.FuelLevel = 0
+	}
 }
 
 // updateTrafficCars updates all traffic cars to move at 5mph less than their lane speed limits
 // Removes cars when their lane disappears instead of collapsing them into lower lanes
+// Also consumes fuel and stops cars when out of fuel
 func (rv *RoadView) updateTrafficCars(baseSpeedLimitMPH, speedPerLaneMPH, pxPerFramePerMPH float64) {
 	var activeTraffic []TrafficCar
 
@@ -621,11 +746,37 @@ func (rv *RoadView) updateTrafficCars(baseSpeedLimitMPH, speedPerLaneMPH, pxPerF
 			continue
 		}
 
+		// Consume fuel based on distance traveled (1 liter per 100 road units = 60,000 pixels)
+		if tc.FuelLevel > 0 && tc.FuelCapacity > 0 {
+			// Base consumption: 1 liter per 100 road units = 1 liter per 60,000 pixels
+			// Each road unit is 600 pixels, so 100 units = 60,000 pixels
+			const pixelsPerRoadUnit = 600.0
+			const roadUnitsPerLiter = 100.0
+			const pixelsPerLiter = roadUnitsPerLiter * pixelsPerRoadUnit // 60,000 pixels
+
+			litersConsumed := tc.Speed / pixelsPerLiter
+
+			// Faster lanes consume more fuel per unit distance
+			speedMultiplier := 1.0 + (float64(tc.Lane) * 0.2) // 20% more per lane
+			litersConsumed *= speedMultiplier
+
+			// Convert liters to fuel level (0.0 to 1.0)
+			fuelConsumed := litersConsumed / tc.FuelCapacity
+			tc.FuelLevel -= fuelConsumed
+			if tc.FuelLevel < 0 {
+				tc.FuelLevel = 0
+			}
+		}
+
 		// Calculate speed limit for this lane
 		speedLimitMPH := baseSpeedLimitMPH + (float64(tc.Lane) * speedPerLaneMPH)
 
 		// Traffic cars move 5mph slower than the lane speed limit (more challenging)
+		// But stop if out of fuel
 		trafficSpeedMPH := speedLimitMPH - 5.0
+		if tc.FuelLevel <= 0 {
+			trafficSpeedMPH = 0 // Out of fuel - stop
+		}
 		// Ensure speed doesn't go below 0
 		if trafficSpeedMPH < 0 {
 			trafficSpeedMPH = 0
@@ -636,7 +787,10 @@ func (rv *RoadView) updateTrafficCars(baseSpeedLimitMPH, speedPerLaneMPH, pxPerF
 		tc.Speed = trafficSpeedPxPerFrame
 
 		// Update traffic car position (moves upward like player car)
-		tc.Y += tc.Speed
+		// Only move if car has fuel
+		if tc.FuelLevel > 0 {
+			tc.Y += tc.Speed
+		}
 
 		// Keep traffic car centered in its lane
 		tc.X = float64(tc.Lane)*rv.road.LaneWidth + rv.road.LaneWidth/2
@@ -677,6 +831,9 @@ func (rv *RoadView) Draw(screen *ebiten.Image) {
 
 	// Draw speedometer and distance
 	rv.drawSpeedometer(screen, width, height)
+
+	// Draw XP display (premium UI)
+	rv.drawXPDisplay(screen, width, height)
 
 	// Draw detailed car stats breakdown
 	rv.drawCarDetails(screen, width, height)
@@ -832,6 +989,115 @@ func (rv *RoadView) drawSpeedometer(screen *ebiten.Image, width, height int) {
 	speedLimitOp.GeoM.Translate(speedLimitX, speedLimitY)
 	speedLimitOp.ColorScale.ScaleWithColor(speedColor)
 	text.Draw(screen, speedLimitText, face, speedLimitOp)
+
+	// Draw fuel level below speed limit
+	if rv.carModel != nil {
+		fuelLevel := rv.carModel.FuelLevel
+		fuelCapacity := rv.carModel.FuelCapacity
+		fuelLiters := fuelLevel * fuelCapacity
+		fuelText := fmt.Sprintf("FUEL: %.1f / %.1f L (%.0f%%)", fuelLiters, fuelCapacity, fuelLevel*100)
+
+		// Change color based on fuel level
+		fuelColor := speedColor
+		if fuelLevel < 0.2 {
+			fuelColor = color.RGBA{255, 0, 0, 255} // Red for low fuel
+		} else if fuelLevel < 0.5 {
+			fuelColor = color.RGBA{255, 200, 0, 255} // Orange for medium fuel
+		}
+
+		fuelWidth := text.Advance(fuelText, face)
+		fuelX := float64(width) - fuelWidth - 20.0
+		fuelY := 150.0
+
+		fuelOp := &text.DrawOptions{}
+		fuelOp.GeoM.Translate(fuelX, fuelY)
+		fuelOp.ColorScale.ScaleWithColor(fuelColor)
+		text.Draw(screen, fuelText, face, fuelOp)
+	}
+}
+
+// drawXPDisplay draws a premium XP and level display in the top-left corner
+func (rv *RoadView) drawXPDisplay(screen *ebiten.Image, width, height int) {
+	if rv.gameState == nil || rv.gameState.Player == nil {
+		return
+	}
+
+	face := text.NewGoXFace(bitmapfont.Face)
+	stats := rv.gameState.Player.Stats
+
+	// Premium colors
+	levelColor := color.RGBA{255, 215, 0, 255}          // Gold for level
+	xpColor := color.RGBA{100, 200, 255, 255}           // Light blue for XP
+	progressBgColor := color.RGBA{40, 40, 40, 200}      // Dark gray background for progress bar
+	progressFillColor := color.RGBA{100, 200, 100, 255} // Green for progress fill
+
+	startX := 20.0
+	startY := 20.0
+	lineHeight := 24.0
+	currentY := startY
+
+	// Level display with gold color
+	levelText := fmt.Sprintf("LEVEL %d", stats.Level)
+	drawTextAt(screen, levelText, startX, currentY, 20, levelColor, face)
+	currentY += lineHeight
+
+	// XP display
+	xpText := fmt.Sprintf("%d / %d XP", stats.XP, stats.XPToNext)
+	drawTextAt(screen, xpText, startX, currentY, 16, xpColor, face)
+	currentY += lineHeight + 5
+
+	// XP Progress bar
+	barWidth := 200.0
+	barHeight := 12.0
+	barX := startX
+	barY := currentY
+
+	// Draw progress bar background
+	progressBg := ebiten.NewImage(int(barWidth), int(barHeight))
+	progressBg.Fill(progressBgColor)
+	bgOp := &ebiten.DrawImageOptions{}
+	bgOp.GeoM.Translate(barX, barY)
+	screen.DrawImage(progressBg, bgOp)
+
+	// Calculate progress percentage (avoid division by zero)
+	progress := 0.0
+	if stats.XPToNext > 0 {
+		progress = float64(stats.XP) / float64(stats.XPToNext)
+		if progress > 1.0 {
+			progress = 1.0
+		}
+		if progress < 0.0 {
+			progress = 0.0
+		}
+	} else {
+		// If XPToNext is 0 or negative, show 100% progress
+		progress = 1.0
+	}
+
+	// Draw progress fill
+	fillWidth := barWidth * progress
+	// Ensure width is at least 1 pixel to avoid panic (ebiten requires positive dimensions)
+	if fillWidth > 0 {
+		fillWidthInt := int(fillWidth)
+		if fillWidthInt < 1 {
+			fillWidthInt = 1
+		}
+		progressFill := ebiten.NewImage(fillWidthInt, int(barHeight))
+		progressFill.Fill(progressFillColor)
+		fillOp := &ebiten.DrawImageOptions{}
+		fillOp.GeoM.Translate(barX, barY)
+		screen.DrawImage(progressFill, fillOp)
+	}
+
+	// Draw progress percentage text
+	progressText := fmt.Sprintf("%.0f%%", progress*100)
+	progressTextWidth := text.Advance(progressText, face)
+	progressTextX := barX + barWidth/2 - progressTextWidth/2
+	progressTextY := barY + barHeight/2 - 8
+	progressOp := &text.DrawOptions{}
+	progressOp.GeoM.Translate(progressTextX, progressTextY)
+	progressOp.ColorScale.ScaleWithColor(color.RGBA{255, 255, 255, 255})
+	text.Draw(screen, progressText, face, progressOp)
 }
 
 // drawCarDetails draws a detailed breakdown of car stats on the left side of the screen
