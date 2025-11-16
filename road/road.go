@@ -3,26 +3,35 @@ package road
 import (
 	"bufio"
 	"fmt"
-	"image/color"
 	"os"
 	"strconv"
 
 	"github.com/hajimehoshi/ebiten/v2"
+	"github.com/hajimehoshi/ebiten/v2/ebitenutil"
 )
 
 // RoadSegment represents a single segment of road with a specific number of lanes
 type RoadSegment struct {
-	NumLanes           int     // Number of lanes in this segment (includes petrol station lane if present)
-	StartY             float64 // World Y position where this segment starts
-	EndY               float64 // World Y position where this segment ends
-	HasPetrolStationLane bool  // Whether this segment has a petrol station lane (40mph) on the right (lane 0)
+	NumLanes             int     // Number of lanes in this segment (includes | lane if present)
+	StartY               float64 // World Y position where this segment starts
+	EndY                 float64 // World Y position where this segment ends
+	HasPetrolStationLane bool    // Whether this segment has a | lane (40mph) on the left
+	HasDiagonalBefore    bool    // Whether this segment has a \ symbol - merging in
+	HasDiagonalAfter     bool    // Whether this segment has a / symbol - merging out
+	TileType             string  // Which sprite to use: "normal", "onramp", "offramp"
 }
 
 // Road represents a highway made of segments loaded from a level file
 type Road struct {
 	Segments      []RoadSegment // All road segments
-	LaneWidth    float64       // Width of each lane in pixels
-	SegmentHeight float64      // Height of each segment (window height)
+	LaneWidth     float64       // Width of each lane in pixels
+	SegmentHeight float64       // Height of each segment (window height)
+
+	// Pre-rendered segment tiles
+	normalRoadTile *ebiten.Image // Normal road segment tile
+	onRampTile     *ebiten.Image // On-ramp diagonal segment tile (\)
+	offRampTile    *ebiten.Image // Off-ramp diagonal segment tile (/)
+	laybyTile      *ebiten.Image // Layby (| lane) sprite tile
 }
 
 // LoadRoadFromFile loads a road from a level file
@@ -45,12 +54,23 @@ func LoadRoadFromFile(filename string, segmentHeight float64, laneWidth float64)
 			continue
 		}
 
-		// Check for 'P' suffix indicating petrol station lane
+		// Check for suffixes: '|' (special lane), '\' (diagonal before), '/' (diagonal after)
 		hasPetrolStation := false
+		tileType := "normal"
 		laneStr := line
-		if len(line) > 0 && line[len(line)-1] == 'P' {
-			hasPetrolStation = true
-			laneStr = line[:len(line)-1] // Remove 'P' suffix
+
+		if len(line) > 0 {
+			lastChar := line[len(line)-1]
+			if lastChar == '|' {
+				hasPetrolStation = true
+				laneStr = line[:len(line)-1] // Remove '|' suffix
+			} else if lastChar == '/' {
+				tileType = "offramp"
+				laneStr = line[:len(line)-1] // Remove '/' suffix
+			} else if lastChar == '\\' {
+				tileType = "onramp"
+				laneStr = line[:len(line)-1] // Remove '\' suffix
+			}
 		}
 
 		numLanes, err := strconv.Atoi(laneStr)
@@ -62,17 +82,20 @@ func LoadRoadFromFile(filename string, segmentHeight float64, laneWidth float64)
 			numLanes = 1
 		}
 
-		// If petrol station lane is present, add one extra lane (the petrol station lane)
-		// The petrol station lane will be lane 0 (rightmost/starting lane)
+		// If | lane is present, add one extra lane (the | lane)
+		// The | lane will be lane 0 (leftmost lane)
 		if hasPetrolStation {
-			numLanes++ // Add the petrol station lane
+			numLanes++ // Add the | lane
 		}
 
 		segment := RoadSegment{
-			NumLanes:            numLanes,
-			StartY:              currentY,
-			EndY:                currentY + segmentHeight,
+			NumLanes:             numLanes,
+			StartY:               currentY,
+			EndY:                 currentY + segmentHeight,
 			HasPetrolStationLane: hasPetrolStation,
+			HasDiagonalBefore:    tileType == "onramp",
+			HasDiagonalAfter:     tileType == "offramp",
+			TileType:             tileType,
 		}
 		segments = append(segments, segment)
 
@@ -83,11 +106,17 @@ func LoadRoadFromFile(filename string, segmentHeight float64, laneWidth float64)
 		return nil, fmt.Errorf("error reading level file: %w", err)
 	}
 
-	return &Road{
+	road := &Road{
 		Segments:      segments,
 		LaneWidth:     laneWidth,
 		SegmentHeight: segmentHeight,
-	}, nil
+	}
+
+	// Load road segment tiles from sprite files
+	// If loading fails, tiles will be nil and won't be drawn
+	_ = road.loadRoadTiles()
+
+	return road, nil
 }
 
 // GetSegmentAtY returns the road segment at the given world Y position
@@ -124,21 +153,21 @@ func (r *Road) GetRoadWidthAtY(worldY float64) float64 {
 }
 
 // GetLaneCenterX returns the world X coordinate of the center of the given lane
-// Accounts for petrol station lane on the left side
+// Accounts for | lane on the left side
 func (r *Road) GetLaneCenterX(lane int, worldY float64) float64 {
 	segment := r.GetSegmentAtY(worldY)
 	if segment == nil {
 		return float64(lane)*r.LaneWidth + r.LaneWidth/2
 	}
-	
-	// If segment has a petrol station lane:
-	// - P lane (lane 0) is at X=-LaneWidth (to the left of normal lanes)
+
+	// If segment has a | lane:
+	// - | lane (lane 0) is at X=-LaneWidth (to the left of normal lanes)
 	// - Normal lane 0 (lane 1) is at X=0
 	// - Normal lane 1 (lane 2) is at X=LaneWidth
 	// - Normal lane 2 (lane 3) is at X=2*LaneWidth, etc.
 	if segment.HasPetrolStationLane {
 		if lane == 0 {
-			// P lane is at X=-LaneWidth (left side)
+			// | lane is at X=-LaneWidth (left side)
 			return -r.LaneWidth + r.LaneWidth/2
 		}
 		// Normal lanes are at their standard positions, but lane index is offset by 1
@@ -146,8 +175,8 @@ func (r *Road) GetLaneCenterX(lane int, worldY float64) float64 {
 		normalLaneIndex := lane - 1 // Convert to normal lane index (0, 1, 2, ...)
 		return float64(normalLaneIndex)*r.LaneWidth + r.LaneWidth/2
 	}
-	
-	// Standard lane positioning (no P lane)
+
+	// Standard lane positioning (no | lane)
 	// Lane 0 at X=0, Lane 1 at X=LaneWidth, etc.
 	return float64(lane)*r.LaneWidth + r.LaneWidth/2
 }
@@ -179,12 +208,12 @@ func (r *Road) Draw(screen *ebiten.Image, cameraX, cameraY float64) {
 
 		// Calculate segment bounds in world space
 		// Normal lanes always at fixed positions: X=0, X=LaneWidth, X=2*LaneWidth, etc.
-		// If segment has P lane, it's added on the left at X=-LaneWidth
+		// If segment has | lane, it's added on the left at X=-LaneWidth
 		normalLaneCount := segment.NumLanes
 		if segment.HasPetrolStationLane {
-			normalLaneCount = segment.NumLanes - 1 // Exclude P lane from normal count
+			normalLaneCount = segment.NumLanes - 1 // Exclude | lane from normal count
 		}
-		
+
 		// Normal road extends from X=0 to X=normalLaneCount*LaneWidth
 		roadWorldLeft := 0.0
 		roadWorldRight := float64(normalLaneCount) * r.LaneWidth
@@ -232,12 +261,12 @@ func (r *Road) Draw(screen *ebiten.Image, cameraX, cameraY float64) {
 		// Calculate dimensions
 		roadWidthPx := roadRightScreenX - roadLeftScreenX
 		roadHeightPx := drawEndY - drawStartY
-		
+
 		// Only skip if dimensions are truly invalid
 		if roadWidthPx <= 0 || roadHeightPx <= 0 {
 			continue
 		}
-		
+
 		// Clamp road X coordinates to screen bounds if needed
 		drawLeftX := roadLeftScreenX
 		drawRightX := roadRightScreenX
@@ -255,182 +284,111 @@ func (r *Road) Draw(screen *ebiten.Image, cameraX, cameraY float64) {
 			continue
 		}
 
-		// Draw road surface (lighter gray)
-		roadColor := color.RGBA{60, 60, 60, 255}
-		
-		// If segment has P lane, draw it separately on the left at X=-LaneWidth
-		if segment.HasPetrolStationLane {
-			// Draw P lane at X=-LaneWidth (left side, opposite to normal lanes)
-			pLaneWorldLeft := -r.LaneWidth
-			pLaneWorldRight := 0.0
-			pLaneLeftScreenX := screenCenterX - (pLaneWorldLeft - cameraX)
-			pLaneRightScreenX := screenCenterX - (pLaneWorldRight - cameraX)
-			
+		// Get sprite tile based on pre-assigned TileType (no logic here, just lookup)
+		var roadTile *ebiten.Image
+		switch segment.TileType {
+		case "onramp":
+			roadTile = r.onRampTile
+		case "offramp":
+			roadTile = r.offRampTile
+		default:
+			roadTile = r.normalRoadTile
+		}
+
+		// Draw main road sprite tile - tile horizontally to fill road width
+		if roadTile != nil {
+			tileWidth := float64(roadTile.Bounds().Dx())
+
+			// Tile horizontally to fill the road width
+			currentX := drawLeftX
+			for currentX < drawRightX {
+				op := &ebiten.DrawImageOptions{}
+				op.GeoM.Translate(currentX, drawStartY)
+				screen.DrawImage(roadTile, op)
+				currentX += tileWidth
+			}
+		}
+
+		// Draw layby (| lane) - tile horizontally to fill layby width
+		if segment.HasPetrolStationLane && r.laybyTile != nil {
+			// Layby is at X=-LaneWidth (left of normal lanes at X=0)
+			laybyWorldLeft := -r.LaneWidth
+			laybyWorldRight := 0.0
+			laybyLeftScreenX := screenCenterX - (laybyWorldLeft - cameraX)
+			laybyRightScreenX := screenCenterX - (laybyWorldRight - cameraX)
+
 			// Ensure left < right
-			if pLaneLeftScreenX > pLaneRightScreenX {
-				pLaneLeftScreenX, pLaneRightScreenX = pLaneRightScreenX, pLaneLeftScreenX
+			if laybyLeftScreenX > laybyRightScreenX {
+				laybyLeftScreenX, laybyRightScreenX = laybyRightScreenX, laybyLeftScreenX
 			}
-			
+
 			// Clamp to screen
-			if pLaneRightScreenX > 0 && pLaneLeftScreenX < float64(width) {
-				pLaneDrawLeftX := pLaneLeftScreenX
-				if pLaneDrawLeftX < 0 {
-					pLaneDrawLeftX = 0
+			if laybyRightScreenX > 0 && laybyLeftScreenX < float64(width) {
+				laybyDrawLeftX := laybyLeftScreenX
+				if laybyDrawLeftX < 0 {
+					laybyDrawLeftX = 0
 				}
-				pLaneDrawRightX := pLaneRightScreenX
-				if pLaneDrawRightX > float64(width) {
-					pLaneDrawRightX = float64(width)
+				laybyDrawRightX := laybyRightScreenX
+				if laybyDrawRightX > float64(width) {
+					laybyDrawRightX = float64(width)
 				}
-				pLaneDrawWidth := pLaneDrawRightX - pLaneDrawLeftX
-				if pLaneDrawWidth > 0 && roadHeightPx > 0 {
-					pLaneRect := ebiten.NewImage(int(pLaneDrawWidth), int(roadHeightPx))
-					pLaneRect.Fill(roadColor)
-					pLaneOp := &ebiten.DrawImageOptions{}
-					pLaneOp.GeoM.Translate(pLaneDrawLeftX, drawStartY)
-					screen.DrawImage(pLaneRect, pLaneOp)
+
+				// Tile horizontally to fill layby width
+				tileWidth := float64(r.laybyTile.Bounds().Dx())
+				currentX := laybyDrawLeftX
+				for currentX < laybyDrawRightX {
+					op := &ebiten.DrawImageOptions{}
+					op.GeoM.Translate(currentX, drawStartY)
+					screen.DrawImage(r.laybyTile, op)
+					currentX += tileWidth
 				}
 			}
 		}
-		
-		// Draw normal road surface (always at X=0 and beyond, regardless of P lane)
-		// Ensure dimensions are valid integers before creating image
-		roadWidthInt := int(roadWidthPx)
-		roadHeightInt := int(roadHeightPx)
-		if roadWidthInt <= 0 || roadHeightInt <= 0 {
-			continue
-		}
-		roadRect := ebiten.NewImage(roadWidthInt, roadHeightInt)
-		roadRect.Fill(roadColor)
-		roadOp := &ebiten.DrawImageOptions{}
-		roadOp.GeoM.Translate(drawLeftX, drawStartY)
-		screen.DrawImage(roadRect, roadOp)
 
-		// Draw lane dividers
-		dividerColor := color.RGBA{255, 255, 0, 255} // Yellow
-		dividerWidth := 2.0
-		dividerDashLength := 20.0
-		dividerGapLength := 10.0
-
-		// Draw dividers between lanes
-		// If segment has P lane: divider between P lane (0) and first normal lane (1) at X=0
-		// Then dividers between normal lanes at X=LaneWidth, 2*LaneWidth, etc.
-		// If no P lane: dividers at X=LaneWidth, 2*LaneWidth, etc.
-		if segment.HasPetrolStationLane {
-			// Draw divider between P lane (0) and first normal lane (1) at X=0
-			laneDividerWorldX := 0.0
-			dividerScreenX := screenCenterX - (laneDividerWorldX - cameraX)
-			
-			// Draw dashed line for P lane divider
-			currentY := drawStartY
-			for currentY < drawEndY {
-				dashEndY := currentY + dividerDashLength
-				if dashEndY > drawEndY {
-					dashEndY = drawEndY
-				}
-				dashHeight := dashEndY - currentY
-				if dashHeight <= 0 {
-					break
-				}
-				dividerWidthInt := int(dividerWidth)
-				dashHeightInt := int(dashHeight)
-				if dividerWidthInt <= 0 || dashHeightInt <= 0 {
-					break
-				}
-				dividerRect := ebiten.NewImage(dividerWidthInt, dashHeightInt)
-				dividerRect.Fill(dividerColor)
-				dividerOp := &ebiten.DrawImageOptions{}
-				dividerOp.GeoM.Translate(dividerScreenX-dividerWidth/2, currentY)
-				screen.DrawImage(dividerRect, dividerOp)
-				currentY = dashEndY + dividerGapLength
-			}
-		}
-
-		// Draw dividers between normal lanes (always at X=LaneWidth, 2*LaneWidth, etc.)
-		// Normal lanes start at lane 1 if P lane exists, or lane 0 if no P lane
-		normalLaneStart := 1
-		if segment.HasPetrolStationLane {
-			normalLaneStart = 2 // Skip P lane (0) and first normal lane divider (already drawn)
-		} else {
-			normalLaneStart = 1 // Start from lane 1 divider
-		}
-		
-		for lane := normalLaneStart; lane < segment.NumLanes; lane++ {
-			// Calculate divider position in world space
-			// For normal lanes: divider between normal lane N and N+1 is at X = (N+1) * LaneWidth
-			// But we need to account for P lane offset
-			normalLaneIndex := lane
-			if segment.HasPetrolStationLane {
-				normalLaneIndex = lane - 1 // Convert to normal lane index (P lane is lane 0)
-			}
-			// Divider between normal lane N and N+1 is at X = (N+1) * LaneWidth
-			laneDividerWorldX := float64(normalLaneIndex) * r.LaneWidth
-			dividerScreenX := screenCenterX - (laneDividerWorldX - cameraX)
-
-			// Draw dashed line
-			currentY := drawStartY
-			for currentY < drawEndY {
-				// Draw dash
-				dashEndY := currentY + dividerDashLength
-				if dashEndY > drawEndY {
-					dashEndY = drawEndY
-				}
-				dashHeight := dashEndY - currentY
-				if dashHeight <= 0 {
-					break
-				}
-				// Ensure dimensions are valid before creating image
-				dividerWidthInt := int(dividerWidth)
-				dashHeightInt := int(dashHeight)
-				if dividerWidthInt <= 0 || dashHeightInt <= 0 {
-					break
-				}
-				dividerRect := ebiten.NewImage(dividerWidthInt, dashHeightInt)
-				dividerRect.Fill(dividerColor)
-				dividerOp := &ebiten.DrawImageOptions{}
-				dividerOp.GeoM.Translate(dividerScreenX-dividerWidth/2, currentY)
-				screen.DrawImage(dividerRect, dividerOp)
-
-				// Move to next dash
-				currentY = dashEndY + dividerGapLength
-			}
-		}
-
-		// Draw road edges
-		edgeColor := color.RGBA{255, 255, 255, 255} // White
-		edgeWidth := 3.0
-		edgeHeight := drawEndY - drawStartY
-		if edgeHeight > 0 {
-			// Ensure dimensions are valid integers
-			edgeWidthInt := int(edgeWidth)
-			edgeHeightInt := int(edgeHeight)
-			if edgeWidthInt > 0 && edgeHeightInt > 0 {
-				// Left edge of normal road (at X=0)
-				leftEdgeRect := ebiten.NewImage(edgeWidthInt, edgeHeightInt)
-				leftEdgeRect.Fill(edgeColor)
-				leftEdgeOp := &ebiten.DrawImageOptions{}
-				leftEdgeOp.GeoM.Translate(drawLeftX-edgeWidth/2, drawStartY)
-				screen.DrawImage(leftEdgeRect, leftEdgeOp)
-				
-				// If segment has P lane, also draw left edge of P lane at X=-LaneWidth
-				if segment.HasPetrolStationLane {
-					pLaneLeftWorldX := -r.LaneWidth
-					pLaneLeftScreenX := screenCenterX - (pLaneLeftWorldX - cameraX)
-					if pLaneLeftScreenX >= -edgeWidth && pLaneLeftScreenX <= float64(width) {
-						pLaneLeftEdgeRect := ebiten.NewImage(edgeWidthInt, edgeHeightInt)
-						pLaneLeftEdgeRect.Fill(edgeColor)
-						pLaneLeftEdgeOp := &ebiten.DrawImageOptions{}
-						pLaneLeftEdgeOp.GeoM.Translate(pLaneLeftScreenX-edgeWidth/2, drawStartY)
-						screen.DrawImage(pLaneLeftEdgeRect, pLaneLeftEdgeOp)
-					}
-				}
-
-				// Right edge
-				rightEdgeRect := ebiten.NewImage(edgeWidthInt, edgeHeightInt)
-				rightEdgeRect.Fill(edgeColor)
-				rightEdgeOp := &ebiten.DrawImageOptions{}
-				rightEdgeOp.GeoM.Translate(drawRightX-edgeWidth/2, drawStartY)
-				screen.DrawImage(rightEdgeRect, rightEdgeOp)
-			}
-		}
 	}
+}
+
+// loadRoadTiles loads road segment tiles from sprite files
+func (r *Road) loadRoadTiles() error {
+	// Try to load normal road tile
+	normalRoadImg, _, err := ebitenutil.NewImageFromFile("assets/road/normal.png")
+	if err != nil {
+		fmt.Printf("Warning: Could not load normal road sprite: %v\n", err)
+		// Don't return error, just continue without it
+	} else {
+		r.normalRoadTile = normalRoadImg
+		fmt.Printf("Loaded normal road sprite: %dx%d\n", normalRoadImg.Bounds().Dx(), normalRoadImg.Bounds().Dy())
+	}
+
+	// Try to load on-ramp tile
+	onRampImg, _, err := ebitenutil.NewImageFromFile("assets/road/onramp.png")
+	if err != nil {
+		fmt.Printf("Warning: Could not load on-ramp sprite: %v\n", err)
+		// Don't return error, just continue without it
+	} else {
+		r.onRampTile = onRampImg
+		fmt.Printf("Loaded on-ramp sprite: %dx%d\n", onRampImg.Bounds().Dx(), onRampImg.Bounds().Dy())
+	}
+
+	// Try to load off-ramp tile
+	offRampImg, _, err := ebitenutil.NewImageFromFile("assets/road/offramp.png")
+	if err != nil {
+		fmt.Printf("Warning: Could not load off-ramp sprite: %v\n", err)
+		// Don't return error, just continue without it
+	} else {
+		r.offRampTile = offRampImg
+		fmt.Printf("Loaded off-ramp sprite: %dx%d\n", offRampImg.Bounds().Dx(), offRampImg.Bounds().Dy())
+	}
+
+	// Try to load layby tile
+	laybyImg, _, err := ebitenutil.NewImageFromFile("assets/road/layby.png")
+	if err != nil {
+		fmt.Printf("Warning: Could not load layby sprite: %v\n", err)
+		// Don't return error, just continue without it
+	} else {
+		r.laybyTile = laybyImg
+		fmt.Printf("Loaded layby sprite: %dx%d\n", laybyImg.Bounds().Dx(), laybyImg.Bounds().Dy())
+	}
+
+	return nil
 }
