@@ -311,43 +311,7 @@ func (gs *GameplayScreen) Update() error {
 		}
 	}
 
-	// Add new segments at the bottom (behind player) if needed
-	// Check if we need more segments visible on screen
-	needMoreSegments := true
-	if len(gs.roadSegments) > 0 {
-		// Check if the last segment (furthest behind) is still visible on screen
-		lastSegment := gs.roadSegments[len(gs.roadSegments)-1]
-		lastScreenY := lastSegment.Y - gs.playerCar.Y + float64(gs.screenHeight)/2
-		// If the last segment's top is still on screen or close, we have enough
-		if lastScreenY > float64(gs.screenHeight)-200 {
-			needMoreSegments = false
-		}
-	}
-	
-	// Add segments at the bottom (behind player) - these have higher Y values
-	for needMoreSegments && len(gs.roadSegments) < 30 {
-		var lastY float64
-		if len(gs.roadSegments) > 0 {
-			lastY = gs.roadSegments[len(gs.roadSegments)-1].Y
-		} else {
-			lastY = gs.playerCar.Y + float64(gs.screenHeight)/2
-		}
-		
-		newSegment := RoadSegment{
-			LaneCount:      4,                             // Default to 4 lanes
-			RoadTypes:      []string{"A", "A", "A", "A"}, // All lanes type A
-			StartLaneIndex: 0,                             // Starting lane at leftmost
-			Y:              lastY + 600,                   // Add below current segments (behind player)
-		}
-		// Append to end (segments with higher Y are behind player)
-		gs.roadSegments = append(gs.roadSegments, newSegment)
-		
-		// Check if we still need more
-		newScreenY := newSegment.Y - gs.playerCar.Y + float64(gs.screenHeight)/2
-		if newScreenY > float64(gs.screenHeight)+200 {
-			needMoreSegments = false
-		}
-	}
+	// All segments are pre-generated from level data, no dynamic addition needed
 
 	return nil
 }
