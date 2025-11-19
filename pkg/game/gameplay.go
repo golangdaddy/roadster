@@ -62,6 +62,7 @@ type GameplayScreen struct {
 	levelData    *LevelData // Store level data for reset
 	initialX     float64   // Initial player X position
 	initialY     float64   // Initial player Y position
+	backgroundPattern *ebiten.Image // Repeating background pattern
 }
 
 // NewGameplayScreen creates a new gameplay screen
@@ -101,6 +102,9 @@ func NewGameplayScreen(selectedCar *car.Car, levelData *LevelData, onGameEnd fun
 
 	// Load road textures
 	gs.loadRoadTextures()
+
+	// Generate repeating background pattern
+	gs.generateBackgroundPattern()
 
 	// Generate road from level data
 	gs.generateRoadFromLevel(levelData)
@@ -291,21 +295,57 @@ func (gs *GameplayScreen) Update() error {
 	}
 
 	// Remove segments that have scrolled off the top of screen
-	if len(gs.roadSegments) > 0 && gs.roadSegments[0].Y > float64(gs.screenHeight)+100 {
-		gs.roadSegments = gs.roadSegments[1:]
+	// Check all segments and remove any that are completely off the top
+	// A segment is 600px tall. It's completely off the top when screenY + 600 < 0
+	for i := 0; i < len(gs.roadSegments); i++ {
+		segment := gs.roadSegments[i]
+		screenY := segment.Y - gs.playerCar.Y + float64(gs.screenHeight)/2
+		// Remove if the bottom of the segment is above the screen (with 100px buffer)
+		if screenY + 600 < -100 {
+			gs.roadSegments = append(gs.roadSegments[:i], gs.roadSegments[i+1:]...)
+			i-- // Adjust index after removal
+		} else {
+			// Segments are ordered, so once we find one that's still visible, we can stop
+			break
+		}
 	}
 
-	// Add new segments at the bottom if needed (simple infinite road generation)
-	if len(gs.roadSegments) < 20 {
-		lastY := gs.roadSegments[len(gs.roadSegments)-1].Y
+	// Add new segments at the bottom (behind player) if needed
+	// Check if we need more segments visible on screen
+	needMoreSegments := true
+	if len(gs.roadSegments) > 0 {
+		// Check if the last segment (furthest behind) is still visible on screen
+		lastSegment := gs.roadSegments[len(gs.roadSegments)-1]
+		lastScreenY := lastSegment.Y - gs.playerCar.Y + float64(gs.screenHeight)/2
+		// If the last segment's top is still on screen or close, we have enough
+		if lastScreenY > float64(gs.screenHeight)-200 {
+			needMoreSegments = false
+		}
+	}
+	
+	// Add segments at the bottom (behind player) - these have higher Y values
+	for needMoreSegments && len(gs.roadSegments) < 30 {
+		var lastY float64
+		if len(gs.roadSegments) > 0 {
+			lastY = gs.roadSegments[len(gs.roadSegments)-1].Y
+		} else {
+			lastY = gs.playerCar.Y + float64(gs.screenHeight)/2
+		}
+		
 		newSegment := RoadSegment{
 			LaneCount:      4,                             // Default to 4 lanes
 			RoadTypes:      []string{"A", "A", "A", "A"}, // All lanes type A
 			StartLaneIndex: 0,                             // Starting lane at leftmost
-			Y:              lastY - 600,                   // Add above current segments (600px segment height)
+			Y:              lastY + 600,                   // Add below current segments (behind player)
 		}
-		// Insert at beginning to maintain order
-		gs.roadSegments = append([]RoadSegment{newSegment}, gs.roadSegments...)
+		// Append to end (segments with higher Y are behind player)
+		gs.roadSegments = append(gs.roadSegments, newSegment)
+		
+		// Check if we still need more
+		newScreenY := newSegment.Y - gs.playerCar.Y + float64(gs.screenHeight)/2
+		if newScreenY > float64(gs.screenHeight)+200 {
+			needMoreSegments = false
+		}
 	}
 
 	return nil
@@ -355,22 +395,8 @@ func (gs *GameplayScreen) drawRoadSegment(screen *ebiten.Image, segment RoadSegm
 	// The left edge of lane 0 is at: 0 - (segment.StartLaneIndex * laneWidth)
 	roadX := -float64(segment.StartLaneIndex)*laneWidth - gs.cameraX
 
-	// Draw grass background for entire segment width first
-	grassImg := ebiten.NewImage(gs.screenWidth, 600)
-	grassImg.Fill(color.RGBA{34, 139, 34, 255}) // Forest green grass
-
-	// Add some grass texture variation
-	for x := 0; x < gs.screenWidth; x++ {
-		for y := 0; y < 600; y += 4 {
-			if (x+y)%7 == 0 {
-				grassImg.Set(x, y, color.RGBA{50, 160, 50, 255}) // Slightly lighter green
-			}
-		}
-	}
-
-	op := &ebiten.DrawImageOptions{}
-	op.GeoM.Translate(0, screenY)
-	screen.DrawImage(grassImg, op)
+	// Draw decorative layer (repeating background pattern with trees and water)
+	gs.drawDecorativeLayer(screen, segment, screenY, roadX, laneWidth)
 
 	// Draw each lane with its specific texture
 	for laneIdx := 0; laneIdx < segment.LaneCount; laneIdx++ {
@@ -416,6 +442,446 @@ func (gs *GameplayScreen) drawRoadSegment(screen *ebiten.Image, segment RoadSegm
 			op.GeoM.Scale(laneWidth/float64(texture.Bounds().Dx()), 600.0/float64(texture.Bounds().Dy()))
 			op.GeoM.Translate(laneX, screenY)
 			screen.DrawImage(texture, op)
+		}
+	}
+}
+
+// generateBackgroundPattern creates a repeating background pattern with trees and water
+func (gs *GameplayScreen) generateBackgroundPattern() {
+	patternHeight := 600 // Match segment height
+	patternWidth := gs.screenWidth
+	
+	pattern := ebiten.NewImage(patternWidth, patternHeight)
+	
+	// Fill with grass
+	pattern.Fill(color.RGBA{34, 139, 34, 255})
+	
+	// Add grass texture variation
+	for x := 0; x < patternWidth; x++ {
+		for y := 0; y < patternHeight; y += 4 {
+			if (x+y)%7 == 0 {
+				pattern.Set(x, y, color.RGBA{50, 160, 50, 255})
+			}
+		}
+	}
+	
+	// Trees will be drawn dynamically per segment based on road position
+	// We'll just generate the grass pattern here
+	
+	// Add water course in middle section (spans full width)
+	waterY := patternHeight / 3
+	gs.drawWaterToPattern(pattern, 0.0, float64(patternWidth), float64(waterY))
+	
+	gs.backgroundPattern = pattern
+}
+
+// drawTreeToPattern draws a simplified tree to the pattern
+func (gs *GameplayScreen) drawTreeToPattern(pattern *ebiten.Image, x, y float64, seed int) {
+	treeWidth := 30
+	treeHeight := 50
+	
+	screenX := int(x)
+	screenY := int(y)
+	
+	// Skip if out of bounds
+	if screenX < 0 || screenX+treeWidth > pattern.Bounds().Dx() || 
+	   screenY < 0 || screenY+treeHeight > pattern.Bounds().Dy() {
+		return
+	}
+	
+	// Tree trunk (brown)
+	trunkColor := color.RGBA{101, 67, 33, 255}
+	trunkWidth := 6
+	trunkHeight := 15
+	trunkX := screenX + treeWidth/2 - trunkWidth/2
+	trunkY := screenY + treeHeight - trunkHeight
+	
+	for ty := 0; ty < trunkHeight; ty++ {
+		for tx := 0; tx < trunkWidth; tx++ {
+			if trunkX+tx >= 0 && trunkX+tx < pattern.Bounds().Dx() &&
+			   trunkY+ty >= 0 && trunkY+ty < pattern.Bounds().Dy() {
+				pattern.Set(trunkX+tx, trunkY+ty, trunkColor)
+			}
+		}
+	}
+	
+	// Tree foliage (simple circle)
+	foliageColors := []color.RGBA{
+		{34, 139, 34, 255},
+		{0, 128, 0, 255},
+		{50, 150, 50, 255},
+		{20, 100, 20, 255},
+	}
+	positiveSeed := seed
+	if positiveSeed < 0 {
+		positiveSeed = -positiveSeed
+	}
+	foliageColor := foliageColors[positiveSeed%len(foliageColors)]
+	
+	foliageCenterX := screenX + treeWidth/2
+	foliageCenterY := screenY + treeHeight/2
+	radius := 15
+	
+	for dy := -radius; dy <= radius; dy++ {
+		for dx := -radius; dx <= radius; dx++ {
+			if dx*dx+dy*dy <= radius*radius {
+				px := foliageCenterX + dx
+				py := foliageCenterY + dy
+				if px >= 0 && px < pattern.Bounds().Dx() && py >= 0 && py < pattern.Bounds().Dy() {
+					pattern.Set(px, py, foliageColor)
+				}
+			}
+		}
+	}
+}
+
+// drawWaterToPattern draws water to the pattern
+func (gs *GameplayScreen) drawWaterToPattern(pattern *ebiten.Image, leftX, rightX, y float64) {
+	waterHeight := 25.0
+	waterColor := color.RGBA{30, 144, 255, 255}
+	
+	for wy := 0; wy < int(waterHeight); wy++ {
+		for wx := int(leftX); wx < int(rightX); wx++ {
+			if wx >= 0 && wx < pattern.Bounds().Dx() {
+				py := int(y) + wy
+				if py >= 0 && py < pattern.Bounds().Dy() {
+					pattern.Set(wx, py, waterColor)
+				}
+			}
+		}
+	}
+}
+
+// drawDecorativeLayer draws the repeating background pattern with trees positioned relative to road
+func (gs *GameplayScreen) drawDecorativeLayer(screen *ebiten.Image, segment RoadSegment, screenY float64, roadX float64, laneWidth float64) {
+	if gs.backgroundPattern == nil {
+		return
+	}
+	
+	segmentHeight := 600.0
+	totalRoadWidth := float64(segment.LaneCount) * laneWidth
+	leftGrassStart := roadX
+	rightGrassEnd := roadX + totalRoadWidth
+	
+	// Calculate how many pattern tiles we need to cover the segment
+	patternHeight := float64(gs.backgroundPattern.Bounds().Dy())
+	numTiles := int(math.Ceil(segmentHeight / patternHeight)) + 1
+	
+	// Draw repeating pattern tiles (grass and water)
+	for i := 0; i < numTiles; i++ {
+		tileY := screenY + float64(i)*patternHeight
+		
+		// Only draw if on screen
+		if tileY > float64(gs.screenHeight) || tileY < -patternHeight {
+			continue
+		}
+		
+		op := &ebiten.DrawImageOptions{}
+		op.GeoM.Translate(0, tileY)
+		screen.DrawImage(gs.backgroundPattern, op)
+	}
+	
+	// Draw trees positioned relative to the road (not at screen edges)
+	// Use segment Y as seed for consistent tree placement
+	segmentYInt := int(segment.Y)
+	if segmentYInt < 0 {
+		segmentYInt = -segmentYInt
+	}
+	segmentSeed := segmentYInt % 1000
+	
+	// Draw trees on left side of road
+	leftTreeX := leftGrassStart - 60.0
+	if leftTreeX > -100 && leftTreeX < float64(gs.screenWidth)+100 {
+		gs.drawTreesToScreen(screen, leftTreeX, screenY, segmentHeight, segmentSeed)
+	}
+	
+	// Draw trees on right side of road
+	rightTreeX := rightGrassEnd + 20.0
+	if rightTreeX > -100 && rightTreeX < float64(gs.screenWidth)+100 {
+		gs.drawTreesToScreen(screen, rightTreeX, screenY, segmentHeight, segmentSeed+500)
+	}
+}
+
+// drawTreesToScreen draws trees at a specific X position along the segment
+func (gs *GameplayScreen) drawTreesToScreen(screen *ebiten.Image, x float64, y float64, height float64, seed int) {
+	treeSpacing := 150.0
+	numTrees := int(height / treeSpacing) + 1
+	
+	// Ensure seed is positive
+	positiveSeed := seed
+	if positiveSeed < 0 {
+		positiveSeed = -positiveSeed
+	}
+	
+	for i := 0; i < numTrees; i++ {
+		treeY := y + float64(i)*treeSpacing + float64(positiveSeed%50)
+		
+		// Only draw if on screen
+		if treeY > -50 && treeY < float64(gs.screenHeight)+50 {
+			treeSeed := positiveSeed + i*17
+			gs.drawTreeToScreen(screen, x, treeY, treeSeed)
+		}
+	}
+}
+
+// drawTreeToScreen draws a single tree directly to screen
+func (gs *GameplayScreen) drawTreeToScreen(screen *ebiten.Image, x, y float64, seed int) {
+	treeWidth := 30
+	treeHeight := 50
+	
+	screenX := int(x)
+	screenY := int(y)
+	
+	// Skip if completely off screen
+	if screenX+treeWidth < 0 || screenX > gs.screenWidth || screenY+treeHeight < 0 || screenY > gs.screenHeight {
+		return
+	}
+	
+	// Create tree sprite
+	treeImg := ebiten.NewImage(treeWidth, treeHeight)
+	
+	// Tree trunk (brown)
+	trunkColor := color.RGBA{101, 67, 33, 255}
+	trunkWidth := 6
+	trunkHeight := 15
+	trunkX := treeWidth/2 - trunkWidth/2
+	trunkY := treeHeight - trunkHeight
+	
+	// Draw trunk
+	for ty := 0; ty < trunkHeight; ty++ {
+		for tx := 0; tx < trunkWidth; tx++ {
+			treeImg.Set(trunkX+tx, trunkY+ty, trunkColor)
+		}
+	}
+	
+	// Tree foliage (green, varies by seed)
+	foliageColors := []color.RGBA{
+		{34, 139, 34, 255},
+		{0, 128, 0, 255},
+		{50, 150, 50, 255},
+		{20, 100, 20, 255},
+	}
+	positiveSeed := seed
+	if positiveSeed < 0 {
+		positiveSeed = -positiveSeed
+	}
+	foliageColor := foliageColors[positiveSeed%len(foliageColors)]
+	
+	foliageCenterX := treeWidth / 2
+	foliageCenterY := treeHeight / 2
+	radius := 15
+	
+	// Draw foliage circle
+	for dy := -radius; dy <= radius; dy++ {
+		for dx := -radius; dx <= radius; dx++ {
+			if dx*dx+dy*dy <= radius*radius {
+				px := foliageCenterX + dx
+				py := foliageCenterY + dy
+				if px >= 0 && px < treeWidth && py >= 0 && py < treeHeight {
+					treeImg.Set(px, py, foliageColor)
+				}
+			}
+		}
+	}
+	
+	// Draw tree to screen
+	op := &ebiten.DrawImageOptions{}
+	op.GeoM.Translate(float64(screenX), float64(screenY))
+	screen.DrawImage(treeImg, op)
+}
+
+// drawTrees draws a row of trees
+func (gs *GameplayScreen) drawTrees(screen *ebiten.Image, x float64, y float64, height float64, seed int, leftSide bool) {
+	treeSpacing := 120.0
+	numTrees := int(height / treeSpacing) + 1
+	
+	// Ensure seed is positive for modulo operations
+	positiveSeed := seed
+	if positiveSeed < 0 {
+		positiveSeed = -positiveSeed
+	}
+	
+	for i := 0; i < numTrees; i++ {
+		treeY := y + float64(i)*treeSpacing + float64(positiveSeed%50)
+		
+		// Only draw if on screen
+		if treeY > -50 && treeY < float64(gs.screenHeight)+50 {
+			treeSeed := positiveSeed + i*17
+			gs.drawTree(screen, x, treeY, treeSeed, leftSide)
+		}
+	}
+}
+
+// drawTree draws a single tree
+func (gs *GameplayScreen) drawTree(screen *ebiten.Image, x, y float64, seed int, leftSide bool) {
+	treeWidth := 40
+	treeHeight := 60
+	
+	// Convert to integer screen coordinates
+	screenX := int(x)
+	screenY := int(y)
+	
+	// Skip if completely off screen
+	if screenX+treeWidth < 0 || screenX > gs.screenWidth || screenY+treeHeight < 0 || screenY > gs.screenHeight {
+		return
+	}
+	
+	// Create tree sprite on offscreen image to avoid glitching
+	treeImg := ebiten.NewImage(treeWidth, treeHeight)
+	
+	// Tree trunk (brown)
+	trunkColor := color.RGBA{101, 67, 33, 255}
+	trunkWidth := 8
+	trunkHeight := 20
+	trunkX := treeWidth/2 - trunkWidth/2
+	trunkY := treeHeight - trunkHeight
+	
+	// Draw trunk
+	for ty := 0; ty < trunkHeight; ty++ {
+		for tx := 0; tx < trunkWidth; tx++ {
+			treeImg.Set(trunkX+tx, trunkY+ty, trunkColor)
+		}
+	}
+	
+	// Tree foliage (green, varies by seed)
+	foliageColors := []color.RGBA{
+		{34, 139, 34, 255},   // Forest green
+		{0, 128, 0, 255},     // Green
+		{50, 150, 50, 255},   // Light green
+		{20, 100, 20, 255},   // Dark green
+	}
+	// Ensure seed is positive for array indexing
+	positiveSeed := seed
+	if positiveSeed < 0 {
+		positiveSeed = -positiveSeed
+	}
+	foliageColor := foliageColors[positiveSeed%len(foliageColors)]
+	
+	// Draw foliage as overlapping circles
+	foliageCenterX := treeWidth / 2
+	foliageCenterY := treeHeight / 2
+	
+	// Main foliage circle
+	radius := 18
+	for dy := -radius; dy <= radius; dy++ {
+		for dx := -radius; dx <= radius; dx++ {
+			if dx*dx+dy*dy <= radius*radius {
+				px := foliageCenterX + dx
+				py := foliageCenterY + dy
+				if px >= 0 && px < treeWidth && py >= 0 && py < treeHeight {
+					treeImg.Set(px, py, foliageColor)
+				}
+			}
+		}
+	}
+	
+	// Smaller circles for depth
+	smallRadius := 12
+	for _, offset := range []struct{ x, y int }{{-8, -5}, {8, -5}, {0, 8}} {
+		for dy := -smallRadius; dy <= smallRadius; dy++ {
+			for dx := -smallRadius; dx <= smallRadius; dx++ {
+				if dx*dx+dy*dy <= smallRadius*smallRadius {
+					px := foliageCenterX + dx + offset.x
+					py := foliageCenterY + dy + offset.y
+					if px >= 0 && px < treeWidth && py >= 0 && py < treeHeight {
+						// Slightly darker for depth
+						darkerColor := color.RGBA{
+							uint8(math.Max(0, float64(foliageColor.R)-20)),
+							uint8(math.Max(0, float64(foliageColor.G)-20)),
+							uint8(math.Max(0, float64(foliageColor.B)-20)),
+							255,
+						}
+						treeImg.Set(px, py, darkerColor)
+					}
+				}
+			}
+		}
+	}
+	
+	// Draw tree sprite to screen
+	op := &ebiten.DrawImageOptions{}
+	op.GeoM.Translate(float64(screenX), float64(screenY))
+	screen.DrawImage(treeImg, op)
+}
+
+// drawWaterCourse draws a water feature (river or stream)
+func (gs *GameplayScreen) drawWaterCourse(screen *ebiten.Image, leftX, rightX, y float64, seed int) {
+	waterWidth := rightX - leftX
+	waterHeight := 30.0
+	
+	// Water color (blue, varies slightly)
+	waterColors := []color.RGBA{
+		{30, 144, 255, 255},  // Dodger blue
+		{0, 191, 255, 255},   // Deep sky blue
+		{70, 130, 180, 255},  // Steel blue
+		{100, 149, 237, 255}, // Cornflower blue
+	}
+	// Ensure seed is positive for array indexing
+	positiveSeed := seed
+	if positiveSeed < 0 {
+		positiveSeed = -positiveSeed
+	}
+	baseWaterColor := waterColors[positiveSeed%len(waterColors)]
+	
+	// Draw water with some variation
+	for wy := 0; wy < int(waterHeight); wy++ {
+		for wx := 0; wx < int(waterWidth); wx++ {
+			screenX := int(leftX) + wx
+			screenY := int(y) + wy
+			
+			if screenX >= 0 && screenX < gs.screenWidth && screenY >= 0 && screenY < gs.screenHeight {
+				// Add some variation for water effect
+				variation := (wx + wy + seed) % 10
+				waterColor := color.RGBA{
+					uint8(math.Min(255, float64(baseWaterColor.R)+float64(variation))),
+					uint8(math.Min(255, float64(baseWaterColor.G)+float64(variation))),
+					uint8(math.Min(255, float64(baseWaterColor.B)+float64(variation))),
+					255,
+				}
+				screen.Set(screenX, screenY, waterColor)
+			}
+		}
+	}
+	
+	// Draw water edges (slightly darker)
+	edgeColor := color.RGBA{
+		uint8(math.Max(0, float64(baseWaterColor.R)-30)),
+		uint8(math.Max(0, float64(baseWaterColor.G)-30)),
+		uint8(math.Max(0, float64(baseWaterColor.B)-30)),
+		255,
+	}
+	
+	// Top and bottom edges
+	for wx := 0; wx < int(waterWidth); wx++ {
+		screenX := int(leftX) + wx
+		if screenX >= 0 && screenX < gs.screenWidth {
+			// Top edge
+			screenY := int(y)
+			if screenY >= 0 && screenY < gs.screenHeight {
+				screen.Set(screenX, screenY, edgeColor)
+			}
+			// Bottom edge
+			screenY = int(y) + int(waterHeight) - 1
+			if screenY >= 0 && screenY < gs.screenHeight {
+				screen.Set(screenX, screenY, edgeColor)
+			}
+		}
+	}
+	
+	// Left and right edges
+	for wy := 0; wy < int(waterHeight); wy++ {
+		screenY := int(y) + wy
+		if screenY >= 0 && screenY < gs.screenHeight {
+			// Left edge
+			screenX := int(leftX)
+			if screenX >= 0 && screenX < gs.screenWidth {
+				screen.Set(screenX, screenY, edgeColor)
+			}
+			// Right edge
+			screenX = int(rightX) - 1
+			if screenX >= 0 && screenX < gs.screenWidth {
+				screen.Set(screenX, screenY, edgeColor)
+			}
 		}
 	}
 }
