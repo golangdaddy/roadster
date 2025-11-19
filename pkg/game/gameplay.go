@@ -294,21 +294,37 @@ func (gs *GameplayScreen) Update() error {
 		gs.resetToStart()
 	}
 
-	// Remove segments that have scrolled completely off screen
-	// Only remove when the entire segment is off-screen
-	for i := 0; i < len(gs.roadSegments); i++ {
+	// Remove segments that are far away from the car in world space
+	// Keep segments until the car is at least 2000px away from them
+	playerY := gs.playerCar.Y
+	minDistance := 2000.0
+	
+	// Build list of segments to remove (iterate backwards to maintain indices)
+	for i := len(gs.roadSegments) - 1; i >= 0; i-- {
 		segment := gs.roadSegments[i]
-		screenY := segment.Y - gs.playerCar.Y + float64(gs.screenHeight)/2
 		
-		// Only remove if completely off-screen (with buffer)
-		// Drawing code draws if: -600 <= screenY <= screenHeight
-		// Remove only if well outside this range
-		if (screenY + 600) < -100 || screenY > float64(gs.screenHeight)+100 {
-			gs.roadSegments = append(gs.roadSegments[:i], gs.roadSegments[i+1:]...)
-			i-- // Adjust index after removal
+		// Calculate distance in world space
+		// Segment extends from segment.Y-600 (top/ahead) to segment.Y (bottom/behind)
+		// Check distance from player to the closest edge of the segment
+		segmentTop := segment.Y - 600.0
+		segmentBottom := segment.Y
+		
+		// Find closest point on segment to player
+		var closestPoint float64
+		if playerY < segmentTop {
+			closestPoint = segmentTop
+		} else if playerY > segmentBottom {
+			closestPoint = segmentBottom
 		} else {
-			// Segments are ordered, so once we find one that's still visible, we can stop
-			break
+			closestPoint = playerY // Player is inside segment
+		}
+		
+		// Calculate distance
+		distance := math.Abs(playerY - closestPoint)
+		
+		// Only remove if car is at least 2000px away from the segment
+		if distance >= minDistance {
+			gs.roadSegments = append(gs.roadSegments[:i], gs.roadSegments[i+1:]...)
 		}
 	}
 
