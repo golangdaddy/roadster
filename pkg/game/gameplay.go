@@ -294,14 +294,16 @@ func (gs *GameplayScreen) Update() error {
 		gs.resetToStart()
 	}
 
-	// Remove segments that have scrolled off the top of screen
-	// Check all segments and remove any that are completely off the top
-	// A segment is 600px tall. It's completely off the top when screenY + 600 < 0
+	// Remove segments that have scrolled completely off screen
+	// Only remove when the entire segment is off-screen
 	for i := 0; i < len(gs.roadSegments); i++ {
 		segment := gs.roadSegments[i]
 		screenY := segment.Y - gs.playerCar.Y + float64(gs.screenHeight)/2
-		// Remove if the bottom of the segment is above the screen (with 100px buffer)
-		if screenY + 600 < -100 {
+		
+		// Only remove if completely off-screen (with buffer)
+		// Drawing code draws if: -600 <= screenY <= screenHeight
+		// Remove only if well outside this range
+		if (screenY + 600) < -100 || screenY > float64(gs.screenHeight)+100 {
 			gs.roadSegments = append(gs.roadSegments[:i], gs.roadSegments[i+1:]...)
 			i-- // Adjust index after removal
 		} else {
@@ -892,7 +894,7 @@ func (gs *GameplayScreen) drawCar(screen *ebiten.Image) {
 
 	// Car position on screen (convert world X to screen X with camera offset)
 	screenX := gs.playerCar.X - gs.cameraX - float64(carWidth)/2
-	screenY := float64(gs.screenHeight) - 150 // Fixed position near bottom
+	screenY := float64(gs.screenHeight)/2 - float64(carHeight)/2 // Centered vertically
 
 	// Create improved retro car sprite
 	carImg := ebiten.NewImage(carWidth, carHeight)
