@@ -5,6 +5,7 @@ import (
 	"image/color"
 	"math"
 	"math/rand"
+	"time"
 
 	"github.com/golangdaddy/roadster/pkg/models/car"
 	"github.com/hajimehoshi/ebiten/v2"
@@ -28,10 +29,97 @@ const (
 
 // TrafficCar represents a traffic vehicle
 type TrafficCar struct {
-	X, Y      float64 // World position
-	VelocityY float64 // Vertical velocity (speed)
-	Lane      int     // Which lane this car is in
-	Color     color.RGBA // Car color for variety
+	X, Y         float64    // World position
+	VelocityY    float64    // Vertical velocity (current speed)
+	TargetSpeed  float64    // Desired speed (based on speed limit)
+	Lane         int        // Which lane this car is in
+	Color        color.RGBA // Car color for variety
+	stopAI       chan bool  // Channel to stop the AI behavior goroutine
+}
+
+// StartAI starts the behavior goroutine for this traffic car
+func (tc *TrafficCar) StartAI(gs *GameplayScreen) {
+	tc.stopAI = make(chan bool)
+	go func() {
+		ticker := time.NewTicker(100 * time.Millisecond)
+		defer ticker.Stop()
+
+		for {
+			select {
+			case <-tc.stopAI:
+				return
+			case <-ticker.C:
+				tc.updateBehavior(gs)
+			}
+		}
+	}()
+}
+
+// StopAI stops the behavior goroutine
+func (tc *TrafficCar) StopAI() {
+	if tc.stopAI != nil {
+		tc.stopAI <- true
+		close(tc.stopAI)
+		tc.stopAI = nil
+	}
+}
+
+// updateBehavior runs the AI logic to maintain safe distance
+func (tc *TrafficCar) updateBehavior(gs *GameplayScreen) {
+	// Find closest car ahead in same lane
+	minDist := 10000.0
+	foundCarAhead := false
+
+	// Check against other traffic
+	// Note: accessing gs.traffic is not thread-safe here strictly speaking
+	// but for this simple game it might be acceptable or we'd need a mutex.
+	// Given the requirement, we'll proceed.
+	for _, other := range gs.traffic {
+		if other == tc {
+			continue
+		}
+		if other.Lane == tc.Lane {
+			// Check if other car is ahead (Y is smaller)
+			if other.Y < tc.Y {
+				dist := tc.Y - other.Y
+				if dist < minDist {
+					minDist = dist
+					foundCarAhead = true
+				}
+			}
+		}
+	}
+
+	// Check against player
+	// Simple lane check based on X distance
+	laneWidth := 80.0
+	if math.Abs(gs.playerCar.X - tc.X) < laneWidth/2 {
+		// Player is in roughly the same lane
+		if gs.playerCar.Y < tc.Y {
+			dist := tc.Y - gs.playerCar.Y
+			if dist < minDist {
+				minDist = dist
+				foundCarAhead = true
+			}
+		}
+	}
+
+	// Adjust speed based on distance
+	safeDistance := 400.0
+	if foundCarAhead && minDist < safeDistance {
+		// Slow down significantly if too close
+		tc.VelocityY *= 0.90
+		// Don't stop completely, but go very slow if needed
+		if tc.VelocityY < 1.0 {
+			tc.VelocityY = 1.0
+		}
+	} else if tc.VelocityY < tc.TargetSpeed {
+		// Accelerate back to target speed if safe
+		tc.VelocityY += 0.2
+		if tc.VelocityY > tc.TargetSpeed {
+			tc.VelocityY = tc.TargetSpeed
+		}
+	}
 }
 
 // Car represents the player's car in the game world
@@ -1131,6 +1219,9 @@ func (gs *GameplayScreen) resetToStart() {
 	gs.cameraX = 0
 	
 	// Clear all traffic
+	for _, tc := range gs.traffic {
+		tc.StopAI()
+	}
 	gs.traffic = make([]*TrafficCar, 0)
 	
 	// Regenerate road from level data
@@ -1158,6 +1249,8 @@ func (gs *GameplayScreen) updateTraffic(scrollSpeed float64, currentSegment Road
 		
 		// Remove traffic that's too far off screen (beyond spawn range)
 		if tc.Y > playerY+trafficSpawnRange+500 || tc.Y < playerY-trafficSpawnRange-500 {
+			// Stop AI behavior
+			tc.StopAI()
 			// Remove from slice
 			gs.traffic = append(gs.traffic[:i], gs.traffic[i+1:]...)
 			i--
@@ -1296,12 +1389,16 @@ func (gs *GameplayScreen) spawnTrafficInDirection(segment RoadSegment, laneWidth
 	
 	// Create new traffic car
 	newTraffic := &TrafficCar{
-		X:         laneCenterX,
-		Y:         spawnY,
-		VelocityY: trafficVelocityY,
-		Lane:      lane,
-		Color:     carColor,
+		X:           laneCenterX,
+		Y:           spawnY,
+		VelocityY:   trafficVelocityY,
+		TargetSpeed: trafficVelocityY, // Initially set target to spawned speed
+		Lane:        lane,
+		Color:       carColor,
 	}
+	
+	// Start AI behavior
+	newTraffic.StartAI(gs)
 	
 	gs.traffic = append(gs.traffic, newTraffic)
 }
