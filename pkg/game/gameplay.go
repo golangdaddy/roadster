@@ -211,7 +211,7 @@ func (gs *GameplayScreen) Update() error {
 	speedLimitMPH := 50.0 + float64(currentLane)*10.0 // Lane 0 = 50, Lane 1 = 60, Lane 2 = 70, etc.
 	maxSpeed := speedLimitMPH / MPHPerPixelPerFrame // Convert MPH to pixels/frame
 	
-	minSpeed := 2.0
+	minSpeed := 0.0 // Allow stopping
 	if ebiten.IsKeyPressed(ebiten.KeyArrowUp) {
 		gs.playerCar.VelocityY += gs.playerCar.Acceleration
 		if gs.playerCar.VelocityY > maxSpeed {
@@ -223,20 +223,11 @@ func (gs *GameplayScreen) Update() error {
 			gs.playerCar.VelocityY = minSpeed
 		}
 	} else {
-		// Gradually return to default speed (but don't exceed speed limit)
-		defaultSpeed := 4.0
-		if defaultSpeed > maxSpeed {
-			defaultSpeed = maxSpeed
-		}
-		if gs.playerCar.VelocityY < defaultSpeed {
-			gs.playerCar.VelocityY += gs.playerCar.Acceleration * 0.5
-			if gs.playerCar.VelocityY > defaultSpeed {
-				gs.playerCar.VelocityY = defaultSpeed
-			}
-		} else if gs.playerCar.VelocityY > defaultSpeed {
-			gs.playerCar.VelocityY -= gs.playerCar.Acceleration * 0.5
-			if gs.playerCar.VelocityY < defaultSpeed {
-				gs.playerCar.VelocityY = defaultSpeed
+		// Gradually slow down when no input (friction)
+		if gs.playerCar.VelocityY > 0 {
+			gs.playerCar.VelocityY -= gs.playerCar.Acceleration * 0.2
+			if gs.playerCar.VelocityY < 0 {
+				gs.playerCar.VelocityY = 0
 			}
 		}
 	}
@@ -1101,9 +1092,9 @@ func (gs *GameplayScreen) checkCollisions() bool {
 	playerLeft := gs.playerCar.X - collisionWidth/2
 	playerRight := gs.playerCar.X + collisionWidth/2
 	
-	// Player car's effective world Y for collision (where traffic would be to collide)
-	// Player is at screen Y 450, traffic at same position means: tc.Y = gs.playerCar.Y + 150
-	playerCollisionY := gs.playerCar.Y + 150.0
+	// Player car's effective world Y for collision
+	// Both player and traffic use the same world coordinate system
+	playerCollisionY := gs.playerCar.Y
 	playerYTop := playerCollisionY - collisionHeight/2
 	playerYBottom := playerCollisionY + collisionHeight/2
 	
@@ -1321,7 +1312,8 @@ func (gs *GameplayScreen) drawTraffic(screen *ebiten.Image) {
 	
 	for _, tc := range gs.traffic {
 		// Calculate screen position relative to player car
-		screenY := tc.Y - gs.playerCar.Y + float64(gs.screenHeight)/2
+		// Center the traffic car vertically to match player car center logic
+		screenY := tc.Y - gs.playerCar.Y + float64(gs.screenHeight)/2 - float64(carHeight)/2
 		
 		// Only draw if on screen
 		if screenY < -100 || screenY > float64(gs.screenHeight)+100 {
