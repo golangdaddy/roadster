@@ -1335,43 +1335,34 @@ func (gs *GameplayScreen) spawnTrafficInDirection(segment RoadSegment, laneWidth
 		maxY = playerY + trafficSpawnRange
 	}
 	
-	// Check if there's already traffic in the spawn range
-	hasTrafficInRange := false
+	// Generate a candidate spawn position
+	var spawnY float64
+	if ahead {
+		// Spawn ahead of player (well off-screen)
+		spawnY = playerY - 1500 - minTrafficDistance*float64(rand.Intn(10))
+		// Clamp to range
+		if spawnY < minY { spawnY = minY }
+		if spawnY > maxY { spawnY = maxY }
+	} else {
+		// Spawn behind player (well off-screen)
+		spawnY = playerY + 1500 + minTrafficDistance*float64(rand.Intn(10))
+		// Clamp to range
+		if spawnY < minY { spawnY = minY }
+		if spawnY > maxY { spawnY = maxY }
+	}
+	
+	// Check if the candidate position is safe (maintaining minimum distance)
+	isSafe := true
 	for _, tc := range laneTraffic {
-		if tc.Y >= minY && tc.Y <= maxY {
-			hasTrafficInRange = true
+		if math.Abs(tc.Y - spawnY) < minTrafficDistance {
+			isSafe = false
 			break
 		}
 	}
 	
-	// If there's already traffic in range, don't spawn more (they'll spawn naturally as traffic moves)
-	if hasTrafficInRange {
+	// If not safe, don't spawn
+	if !isSafe {
 		return
-	}
-	
-	// No traffic in range, spawn one
-	// Calculate spawn position with proper spacing from player (well off-screen)
-	var spawnY float64
-	if ahead {
-		// Spawn ahead of player (well off-screen)
-		// Spawn between 1500-3000px ahead
-		spawnY = playerY - 1500 - minTrafficDistance*float64(rand.Intn(5)) // Spawn 1500-3000px ahead
-		if spawnY < minY {
-			spawnY = minY + (maxY-minY)*rand.Float64() // Random position in spawn range
-		}
-		if spawnY > maxY {
-			spawnY = maxY
-		}
-	} else {
-		// Spawn behind player (well off-screen)
-		// Spawn between 1500-3000px behind
-		spawnY = playerY + 1500 + minTrafficDistance*float64(rand.Intn(5)) // Spawn 1500-3000px behind
-		if spawnY > maxY {
-			spawnY = maxY - (maxY-minY)*rand.Float64() // Random position in spawn range
-		}
-		if spawnY < minY {
-			spawnY = minY
-		}
 	}
 	
 	// Calculate lane center X position
