@@ -72,6 +72,11 @@ func (tc *TrafficCar) StopAI() {
 
 // updateBehavior runs the AI logic to maintain safe distance
 func (tc *TrafficCar) updateBehavior(gs *GameplayScreen) {
+	// Safety check: skip AI updates if coordinates are extreme to prevent panics
+	if math.Abs(tc.Y) > 100000 || math.Abs(gs.playerCar.Y) > 100000 {
+		return
+	}
+
 	// Find closest car ahead in same lane
 	minDist := 10000.0
 	foundCarAhead := false
@@ -192,6 +197,8 @@ type GameplayScreen struct {
 	initialX     float64   // Initial player X position
 	initialY     float64   // Initial player Y position
 	backgroundPattern *ebiten.Image // Repeating background pattern
+	lastSpawnTime int64 // Timestamp of last spawn attempt
+	spawnCooldown int64 // Minimum time between spawn attempts (in milliseconds)
 }
 
 // NewGameplayScreen creates a new gameplay screen
@@ -204,6 +211,8 @@ func NewGameplayScreen(selectedCar *car.Car, levelData *LevelData, onGameEnd fun
 		screenWidth:  1024,
 		screenHeight: 600,
 		onGameEnd:    onGameEnd,
+		lastSpawnTime: time.Now().UnixMilli(),
+		spawnCooldown: 150 + rand.Int63n(100), // 150-250ms random cooldown between spawn attempts
 	}
 
 	// Initialize player car
@@ -305,6 +314,20 @@ func (gs *GameplayScreen) generateRoadFromLevel(levelData *LevelData) {
 func (gs *GameplayScreen) Update() error {
 	currentSegment := gs.getCurrentRoadSegment()
 	laneWidth := 80.0
+
+	// Check for end of level
+	if len(gs.roadSegments) > 0 {
+		lastSegment := gs.roadSegments[len(gs.roadSegments)-1]
+		// If player has reached the top of the last segment (finished the level)
+		if gs.playerCar.Y <= lastSegment.Y {
+			// Level completed! Clean up and call the end game callback
+			gs.cleanupTraffic()
+			if gs.onGameEnd != nil {
+				gs.onGameEnd()
+			}
+			return nil
+		}
+	}
 
 	// Handle steering input (Left/Right arrow keys)
 	maxSteeringAngle := 1.0
@@ -462,6 +485,11 @@ func (gs *GameplayScreen) drawRoad(screen *ebiten.Image) {
 func (gs *GameplayScreen) drawRoadSegment(screen *ebiten.Image, segment RoadSegment) {
 	// Calculate screen position (camera is above car)
 	screenY := segment.Y - gs.playerCar.Y + float64(gs.screenHeight)/2
+
+	// Safety check: skip if coordinates are extreme to prevent ebiten panics
+	if math.Abs(screenY) > 100000 {
+		return
+	}
 
 	// Skip if off screen (using 600px segment height)
 	if screenY > float64(gs.screenHeight) || screenY < -600 {
@@ -1171,8 +1199,14 @@ func (gs *GameplayScreen) getCurrentRoadSegment() RoadSegment {
 		}
 	}
 
-	// Default to first segment if not found
+	// If no segment found and we have segments, check if player is beyond the last segment
 	if len(gs.roadSegments) > 0 {
+		lastSegment := gs.roadSegments[len(gs.roadSegments)-1]
+		if carWorldY <= lastSegment.Y - 600 {
+			// Player is beyond the last segment - use the last segment as reference
+			return lastSegment
+		}
+		// Player is before the first segment - use the first segment
 		return gs.roadSegments[0]
 	}
 
@@ -1285,19 +1319,24 @@ func (gs *GameplayScreen) resetToStart() {
 	gs.playerCar.VelocityY = 0
 	gs.playerCar.SteeringAngle = 0
 	gs.cameraX = 0
-	
+
 	// Clear all traffic
+	gs.cleanupTraffic()
+
+	// Regenerate road from level data
+	gs.roadSegments = make([]RoadSegment, 0)
+	gs.generateRoadFromLevel(gs.levelData)
+
+	// Spawn initial traffic again
+	gs.spawnInitialTraffic()
+}
+
+// cleanupTraffic stops all AI goroutines and clears traffic
+func (gs *GameplayScreen) cleanupTraffic() {
 	for _, tc := range gs.traffic {
 		tc.StopAI()
 	}
 	gs.traffic = make([]*TrafficCar, 0)
-	
-	// Regenerate road from level data
-	gs.roadSegments = make([]RoadSegment, 0)
-	gs.generateRoadFromLevel(gs.levelData)
-	
-	// Spawn initial traffic again
-	gs.spawnInitialTraffic()
 }
 
 // updateTraffic updates traffic positions and spawns new traffic vehicles
@@ -1381,16 +1420,71 @@ func (gs *GameplayScreen) spawnInitialTraffic() {
 
 // spawnTraffic spawns traffic vehicles ahead and behind the player
 func (gs *GameplayScreen) spawnTraffic(segment RoadSegment, laneWidth float64, playerY float64) {
-	// Limit how often we check for new traffic (every few frames)
-	// For now, check every frame but only spawn if needed
-	
-	// Check each lane for traffic spawning (skip lane 0)
+	// Check cooldown before attempting to spawn
+	currentTime := time.Now().UnixMilli()
+	if currentTime - gs.lastSpawnTime < gs.spawnCooldown {
+		return
+	}
+	gs.lastSpawnTime = currentTime
+
+	// Only spawn if we have lanes available (multi-lane roads)
+	if segment.LaneCount < 2 {
+		return
+	}
+
+	// Decide how many lanes to attempt spawning in this cycle (1-3 lanes randomly)
+	numLanesToTry := rand.Intn(3) + 1
+
+	// Randomly select which lanes to try (skip lane 0)
+	availableLanes := make([]int, 0, segment.LaneCount-1)
 	for lane := 1; lane < segment.LaneCount; lane++ {
-		if rand.Float64() < trafficSpawnProbability {
+		availableLanes = append(availableLanes, lane)
+	}
+
+	// Shuffle and pick lanes to try
+	rand.Shuffle(len(availableLanes), func(i, j int) {
+		availableLanes[i], availableLanes[j] = availableLanes[j], availableLanes[i]
+	})
+
+	for i := 0; i < numLanesToTry && i < len(availableLanes); i++ {
+		lane := availableLanes[i]
+
+		// Lane-specific spawn probability (some lanes busier than others)
+		baseProbability := trafficSpawnProbability
+		// Rightmost lanes slightly busier
+		if lane == segment.LaneCount-1 {
+			baseProbability *= 1.3
+		} else if lane == 1 {
+			baseProbability *= 0.8 // Left lanes slightly quieter
+		}
+
+		// Random chance to spawn ahead
+		if rand.Float64() < baseProbability {
 			gs.spawnTrafficInDirection(segment, laneWidth, playerY, lane, true)
 		}
-		if rand.Float64() < trafficSpawnProbability {
+
+		// Random chance to spawn behind (lower probability)
+		if rand.Float64() < baseProbability * 0.6 {
 			gs.spawnTrafficInDirection(segment, laneWidth, playerY, lane, false)
+		}
+	}
+
+	// Occasionally spawn traffic clusters (2-3 cars at once in nearby lanes)
+	// Only spawn clusters if we have at least 2 lanes
+	if rand.Float64() < 0.1 && segment.LaneCount >= 3 { // 10% chance, but only on multi-lane roads
+		clusterSize := rand.Intn(2) + 2 // 2-3 cars
+		clusterLane := rand.Intn(segment.LaneCount-2) + 1 // Avoid lane 0 and ensure valid range
+
+		for i := 0; i < clusterSize; i++ {
+			// Try adjacent lanes for cluster
+			actualLane := clusterLane + (rand.Intn(3) - 1) // -1, 0, or +1 from clusterLane
+			if actualLane >= 1 && actualLane < segment.LaneCount {
+				// Higher chance to spawn for cluster
+				if rand.Float64() < 0.7 {
+					direction := rand.Intn(2) == 0 // Random direction
+					gs.spawnTrafficInDirection(segment, laneWidth, playerY, actualLane, direction)
+				}
+			}
 		}
 	}
 }
@@ -1502,6 +1596,11 @@ func (gs *GameplayScreen) drawTraffic(screen *ebiten.Image) {
 		
 		// Calculate screen X position (convert world X to screen X with camera offset)
 		screenX := tc.X - gs.cameraX - float64(carWidth)/2
+
+		// Skip if too far off-screen horizontally to prevent ebiten panics
+		if screenX < -200 || screenX > float64(gs.screenWidth)+200 {
+			continue
+		}
 		
 		// Create traffic car sprite (similar to player car but with different color)
 		carImg := ebiten.NewImage(carWidth, carHeight)
