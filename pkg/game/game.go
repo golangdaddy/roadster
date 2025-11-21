@@ -58,6 +58,7 @@ type LevelData struct {
 type RoadSegment struct {
 	LaneCount      int
 	RoadTypes      []string // Road type for each lane (left to right)
+	LanePositions  []int    // Character position in level file for each rendered lane (maps rendered index to actual position)
 	StartLaneIndex int      // Index of the starting lane (player's original lane)
 	Y              float64  // World position (added for gameplay rendering)
 }
@@ -84,25 +85,22 @@ func (game *GameLogic) loadLevel(filename string) (*road.RoadController, *LevelD
 		// Parse road types - each character represents a lane position
 		// 'X' means no lane at that position (blank/skip)
 		// Any other letter is a lane type at that position
+		// IMPORTANT: Position 0 in the string is always lane 0, even if it's 'X'
 		roadTypes := make([]string, 0)
+		lanePositions := make([]int, 0) // Maps rendered lane index to character position
 		startLaneIndex := -1
-		firstLineStartPos := -1 // Track the position of the first non-X in the entire level
 
 		// Find which position in the string has lanes
+		// Store both the road type and the character position
 		for pos, char := range line {
 			roadType := string(char)
 			if roadType != "X" {
 				roadTypes = append(roadTypes, roadType)
+				lanePositions = append(lanePositions, pos) // Store the actual character position
 
-				// Track the position of the first segment's lane to use as reference
-				// This will be done better - for now, assume position with most consistency
-				if firstLineStartPos == -1 {
-					firstLineStartPos = pos
-				}
-
-				// The starting lane is whichever lane is at the original starting position
-				// For now, we'll mark lanes by their actual position in the string
-				if pos == 1 { // Position 1 in the string is typically the starting position in your level
+				// The starting lane is at position 1 (second character) if it exists
+				// Otherwise default to the first non-X lane
+				if pos == 1 {
 					startLaneIndex = len(roadTypes) - 1
 				}
 			}
@@ -130,6 +128,7 @@ func (game *GameLogic) loadLevel(filename string) (*road.RoadController, *LevelD
 		segment := RoadSegment{
 			LaneCount:      laneCount,
 			RoadTypes:      roadTypes,
+			LanePositions:  lanePositions,
 			StartLaneIndex: startLaneIndex,
 		}
 		levelData.Segments = append(levelData.Segments, segment)

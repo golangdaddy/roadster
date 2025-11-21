@@ -285,16 +285,23 @@ func (gs *GameplayScreen) generateRoadFromLevel(levelData *LevelData) {
 		// Start with only 1 lane for the first few segments
 		laneCount := segment.LaneCount
 		roadTypes := segment.RoadTypes
+		lanePositions := segment.LanePositions
 		
 		startLaneIdx := segment.StartLaneIndex
 		
 		if i < 3 { // First 3 segments are always 1 lane
 			laneCount = 1
-			// Use only the starting lane's road type
+			// Use only the starting lane's road type and position
 			if startLaneIdx < len(roadTypes) {
 				roadTypes = []string{roadTypes[startLaneIdx]}
 			} else if len(roadTypes) > 0 {
 				roadTypes = []string{roadTypes[0]}
+			}
+			// Preserve the lane position mapping for the starting lane
+			if startLaneIdx < len(lanePositions) {
+				lanePositions = []int{lanePositions[startLaneIdx]}
+			} else if len(lanePositions) > 0 {
+				lanePositions = []int{lanePositions[0]}
 			}
 			startLaneIdx = 0 // Starting lane is at index 0 when there's only 1 lane
 		}
@@ -302,6 +309,7 @@ func (gs *GameplayScreen) generateRoadFromLevel(levelData *LevelData) {
 		roadSegment := RoadSegment{
 			LaneCount:      laneCount,
 			RoadTypes:      roadTypes,
+			LanePositions:  lanePositions,
 			StartLaneIndex: startLaneIdx,
 			Y:              y,
 		}
@@ -1255,24 +1263,32 @@ func (gs *GameplayScreen) getSegmentAt(y float64) RoadSegment {
 }
 
 // getCurrentLane determines which lane the car is currently in
+// Returns the character position in the level file (position 0 = lane 0, even if it's X)
 func (gs *GameplayScreen) getCurrentLane(segment RoadSegment, laneWidth float64) int {
 	// Calculate the left edge of the road segment
 	leftEdge := -float64(segment.StartLaneIndex) * laneWidth
 	
-	// Calculate which lane the car is in based on its X position
+	// Calculate which rendered lane the car is in based on its X position
 	// Lane 0 starts at leftEdge, each lane is laneWidth wide
 	relativeX := gs.playerCar.X - leftEdge
-	laneIndex := int(relativeX / laneWidth)
+	renderedLaneIndex := int(relativeX / laneWidth)
 	
-	// Clamp lane index to valid range
-	if laneIndex < 0 {
-		laneIndex = 0
+	// Clamp rendered lane index to valid range
+	if renderedLaneIndex < 0 {
+		renderedLaneIndex = 0
 	}
-	if laneIndex >= segment.LaneCount {
-		laneIndex = segment.LaneCount - 1
+	if renderedLaneIndex >= segment.LaneCount {
+		renderedLaneIndex = segment.LaneCount - 1
 	}
 	
-	return laneIndex
+	// Map rendered lane index to character position in level file
+	// This ensures position 0 in the level file is always lane 0, even if it's 'X'
+	if renderedLaneIndex < len(segment.LanePositions) {
+		return segment.LanePositions[renderedLaneIndex]
+	}
+	
+	// Fallback: if no mapping exists, return the rendered index (shouldn't happen)
+	return renderedLaneIndex
 }
 
 // checkCollisions checks if the player car collides with any traffic vehicles
@@ -1530,9 +1546,17 @@ func (gs *GameplayScreen) spawnTrafficInDirection(segment RoadSegment, laneWidth
 	leftEdge := -float64(segment.StartLaneIndex) * laneWidth
 	laneCenterX := leftEdge + float64(lane)*laneWidth + laneWidth/2
 	
+	// Map rendered lane index to character position in level file
+	// Position 0 in level file is always lane 0, even if it's 'X'
+	lanePosition := lane
+	if lane < len(segment.LanePositions) {
+		lanePosition = segment.LanePositions[lane]
+	}
+	
 	// Determine traffic speed (exact lane speed limit)
 	// Lane 0=50, Lane 1=65, Lane 2=80, etc. (15mph steps for visibility)
-	speedLimitMPH := 50.0 + float64(lane)*15.0
+	// Use character position for speed calculation
+	speedLimitMPH := 50.0 + float64(lanePosition)*15.0
 	trafficVelocityY := speedLimitMPH / MPHPerPixelPerFrame
 	
 	// Random car colors for variety
