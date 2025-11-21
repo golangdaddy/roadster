@@ -242,7 +242,7 @@ func NewGameplayScreen(selectedCar *car.Car, levelData *LevelData, onGameEnd fun
 	gs.loadRoadTextures()
 
 	// Generate repeating background pattern
-	gs.generateBackgroundPattern()
+	// gs.generateBackgroundPattern()
 
 	// Generate road from level data
 	gs.generateRoadFromLevel(levelData)
@@ -443,7 +443,10 @@ func (gs *GameplayScreen) Update() error {
 	}
 
 	// Remove segments that have scrolled off screen
-	// Use simple screen-based check matching the drawing logic
+	// DISABLED: Removing segments causes issues with visibility at the edges.
+	// Since we have a finite number of segments pre-generated, we can just keep them all.
+	// The draw function handles culling off-screen segments efficiently.
+	/*
 	for i := 0; i < len(gs.roadSegments); i++ {
 		segment := gs.roadSegments[i]
 		screenY := segment.Y - gs.playerCar.Y + float64(gs.screenHeight)/2
@@ -458,6 +461,7 @@ func (gs *GameplayScreen) Update() error {
 			break
 		}
 	}
+	*/
 
 	// All segments are pre-generated from level data, no dynamic addition needed
 
@@ -500,8 +504,13 @@ func (gs *GameplayScreen) drawRoadSegment(screen *ebiten.Image, segment RoadSegm
 		return
 	}
 
-	// Skip if off screen (using 600px segment height)
-	if screenY > float64(gs.screenHeight) || screenY < -600 {
+	// Skip if completely off screen (using 600px segment height)
+	// Draw if any part of the segment is visible on screen
+	segmentHeight := 600.0
+	// Simple visibility check:
+	// If top is below screen bottom (screenY > screenHeight) -> Skip
+	// If bottom is above screen top (screenY + segmentHeight < 0) -> Skip
+	if screenY > float64(gs.screenHeight) || screenY+segmentHeight < 0 {
 		return
 	}
 
@@ -515,7 +524,7 @@ func (gs *GameplayScreen) drawRoadSegment(screen *ebiten.Image, segment RoadSegm
 	roadX := -float64(segment.StartLaneIndex)*laneWidth - gs.cameraX
 
 	// Draw decorative layer (repeating background pattern with trees and water)
-	gs.drawDecorativeLayer(screen, segment, screenY, roadX, laneWidth)
+	// gs.drawDecorativeLayer(screen, segment, screenY, roadX, laneWidth)
 
 	// Draw each lane with its specific texture
 	for laneIdx := 0; laneIdx < segment.LaneCount; laneIdx++ {
