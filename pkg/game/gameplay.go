@@ -42,7 +42,8 @@ type TrafficCar struct {
 func (tc *TrafficCar) StartAI(gs *GameplayScreen) {
 	tc.stopAI = make(chan bool)
 	go func() {
-		ticker := time.NewTicker(100 * time.Millisecond)
+		// Check more frequently (30ms) for smoother reaction
+		ticker := time.NewTicker(30 * time.Millisecond)
 		defer ticker.Stop()
 
 		for {
@@ -70,6 +71,7 @@ func (tc *TrafficCar) updateBehavior(gs *GameplayScreen) {
 	// Find closest car ahead in same lane
 	minDist := 10000.0
 	foundCarAhead := false
+	speedOfCarAhead := 0.0
 
 	// Check against other traffic
 	gs.trafficMutex.RLock()
@@ -84,6 +86,7 @@ func (tc *TrafficCar) updateBehavior(gs *GameplayScreen) {
 				if dist < minDist {
 					minDist = dist
 					foundCarAhead = true
+					speedOfCarAhead = other.VelocityY
 				}
 			}
 		}
@@ -100,6 +103,7 @@ func (tc *TrafficCar) updateBehavior(gs *GameplayScreen) {
 			if dist < minDist {
 				minDist = dist
 				foundCarAhead = true
+				speedOfCarAhead = gs.playerCar.VelocityY
 			}
 		}
 	}
@@ -107,15 +111,24 @@ func (tc *TrafficCar) updateBehavior(gs *GameplayScreen) {
 	// Adjust speed based on distance
 	safeDistance := 400.0
 	if foundCarAhead && minDist < safeDistance {
-		// Slow down significantly if too close
-		tc.VelocityY *= 0.90
-		// Don't stop completely, but go very slow if needed
-		if tc.VelocityY < 1.0 {
-			tc.VelocityY = 1.0
+		// Brake to match speed or go slower
+		targetBrakingSpeed := speedOfCarAhead * 0.9
+		
+		// If very close, brake harder
+		if minDist < 200.0 {
+			targetBrakingSpeed = speedOfCarAhead * 0.5
+		}
+		
+		if tc.VelocityY > targetBrakingSpeed {
+			// Apply braking
+			tc.VelocityY -= 0.2
+			if tc.VelocityY < 0 {
+				tc.VelocityY = 0
+			}
 		}
 	} else if tc.VelocityY < tc.TargetSpeed {
 		// Accelerate back to target speed if safe
-		tc.VelocityY += 0.2
+		tc.VelocityY += 0.1
 		if tc.VelocityY > tc.TargetSpeed {
 			tc.VelocityY = tc.TargetSpeed
 		}
