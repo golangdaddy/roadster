@@ -557,30 +557,155 @@ func (gs *GameplayScreen) drawRoadSegment(screen *ebiten.Image, segment RoadSegm
 	}
 }
 
-// generateBackgroundPattern creates a repeating background pattern with trees and water
+// generateBackgroundPattern creates a seamless repeating countryside background
 func (gs *GameplayScreen) generateBackgroundPattern() {
 	patternHeight := 600 // Match segment height
 	patternWidth := gs.screenWidth
-	
+
 	pattern := ebiten.NewImage(patternWidth, patternHeight)
-	
-	// Fill with grass
-	pattern.Fill(color.RGBA{34, 139, 34, 255})
-	
-	// Add grass texture variation
-	for x := 0; x < patternWidth; x++ {
-		for y := 0; y < patternHeight; y += 4 {
-			if (x+y)%7 == 0 {
-				pattern.Set(x, y, color.RGBA{50, 160, 50, 255})
+
+	// Create a seamless countryside scene that tiles well vertically
+	// We'll use a gradient from sky blue at top to grass green at bottom
+
+	for y := 0; y < patternHeight; y++ {
+		// Sky to grass gradient
+		skyRatio := 1.0 - float64(y)/float64(patternHeight)
+		grassRatio := float64(y) / float64(patternHeight)
+
+		for x := 0; x < patternWidth; x++ {
+			// Base colors
+			skyColor := color.RGBA{135, 206, 235, 255}   // Sky blue
+			grassColor := color.RGBA{34, 139, 34, 255}    // Grass green
+
+			// Blend sky and grass colors
+			r := uint8(float64(skyColor.R)*skyRatio + float64(grassColor.R)*grassRatio)
+			g := uint8(float64(skyColor.G)*skyRatio + float64(grassColor.G)*grassRatio)
+			b := uint8(float64(skyColor.B)*skyRatio + float64(grassColor.B)*grassRatio)
+
+			baseColor := color.RGBA{r, g, b, 255}
+
+			// Add texture variation based on position
+			variation := (x*3 + y*7) % 100
+			if variation < 10 {
+				// Lighter patches
+				baseColor.R = uint8(math.Min(255, float64(baseColor.R)+20))
+				baseColor.G = uint8(math.Min(255, float64(baseColor.G)+30))
+			} else if variation > 90 {
+				// Darker patches
+				baseColor.R = uint8(math.Max(0, float64(baseColor.R)-15))
+				baseColor.G = uint8(math.Max(0, float64(baseColor.G)-20))
+			}
+
+			// Add some rolling hill effect in the middle section
+			if y > patternHeight/4 && y < patternHeight*3/4 {
+				hillEffect := 8 * math.Sin(float64(x)*0.01 + float64(y)*0.005)
+				if hillEffect > 0 {
+					// Darker green for hills
+					baseColor.R = uint8(math.Max(0, float64(baseColor.R)-hillEffect*3))
+					baseColor.G = uint8(math.Max(0, float64(baseColor.G)-hillEffect*2))
+				}
+			}
+
+			pattern.Set(x, y, baseColor)
+		}
+	}
+
+	// Add scattered details that repeat in a tileable way
+	// Use modulo arithmetic to ensure seamless tiling
+
+	// Wildflowers - positioned to tile seamlessly
+	for i := 0; i < 30; i++ {
+		// Position flowers using modulo to ensure they appear at same relative positions when tiled
+		flowerX := (i * 41) % patternWidth
+		// Flowers appear in the lower 2/3 of the pattern
+		flowerY := patternHeight/3 + 20 + (i*29)%(patternHeight*2/3 - 40)
+
+		// Flower stem (green, darker than grass)
+		stemColor := color.RGBA{0, 80, 0, 255}
+		for sy := 0; sy < 6; sy++ {
+			stemY := flowerY + sy
+			if stemY < patternHeight {
+				pattern.Set(flowerX, stemY, stemColor)
+			}
+		}
+
+		// Flower head (various colors)
+		flowerColors := []color.RGBA{
+			{255, 255, 0, 255},  // Yellow
+			{255, 0, 255, 255},  // Magenta
+			{255, 100, 0, 255},  // Orange
+			{200, 0, 200, 255},  // Purple
+			{255, 150, 0, 255},  // Dark orange
+		}
+		flowerColor := flowerColors[i%len(flowerColors)]
+
+		// Simple cross-shaped flower
+		pattern.Set(flowerX, flowerY-1, flowerColor)   // Top
+		pattern.Set(flowerX-1, flowerY, flowerColor)   // Left
+		pattern.Set(flowerX, flowerY, flowerColor)     // Center
+		pattern.Set(flowerX+1, flowerY, flowerColor)   // Right
+		pattern.Set(flowerX, flowerY+1, flowerColor)   // Bottom
+	}
+
+	// Small bushes/shrubs
+	for i := 0; i < 20; i++ {
+		bushX := (i * 53 + 23) % patternWidth
+		bushY := patternHeight/2 + 10 + (i*37)%(patternHeight/2 - 30)
+
+		bushColor := color.RGBA{25, 100, 25, 255} // Dark green
+
+		// Draw small bush (2x2)
+		for dy := -1; dy <= 0; dy++ {
+			for dx := -1; dx <= 0; dx++ {
+				bx := bushX + dx
+				by := bushY + dy
+				if bx >= 0 && bx < patternWidth && by >= 0 && by < patternHeight {
+					pattern.Set(bx, by, bushColor)
+				}
 			}
 		}
 	}
-	
-	// Trees will be drawn dynamically per segment based on road position
-	// We'll just generate the grass pattern here
-	
-	// No water - just grass background
-	
+
+	// Scattered pebbles/rocks for texture
+	for i := 0; i < 50; i++ {
+		rockX := (i * 31 + 13) % patternWidth
+		rockY := patternHeight/3 + (i*43)%(patternHeight*2/3)
+
+		rockColor := color.RGBA{100, 100, 100, 255}
+
+		// Single pixel rocks, some double pixels
+		pattern.Set(rockX, rockY, rockColor)
+		if (i%4) == 0 && rockX+1 < patternWidth {
+			pattern.Set(rockX+1, rockY, rockColor)
+		}
+		if (i%7) == 0 && rockY+1 < patternHeight {
+			pattern.Set(rockX, rockY+1, rockColor)
+		}
+	}
+
+	// Add some subtle cloud-like formations in the upper portion
+	for i := 0; i < 8; i++ {
+		cloudX := (i * 67 + 41) % patternWidth
+		cloudY := 30 + (i*59)%100
+
+		cloudColor := color.RGBA{160, 200, 240, 255} // Light blue-white
+
+		// Small cloud puffs
+		for dy := -2; dy <= 2; dy++ {
+			for dx := -3; dx <= 3; dx++ {
+				cx := cloudX + dx
+				cy := cloudY + dy
+				if cx >= 0 && cx < patternWidth && cy >= 0 && cy < patternHeight/3 {
+					// Only draw if it's a "cloud" shape (circular-ish)
+					dist := math.Sqrt(float64(dx*dx + dy*dy))
+					if dist <= 2.5 {
+						pattern.Set(cx, cy, cloudColor)
+					}
+				}
+			}
+		}
+	}
+
 	gs.backgroundPattern = pattern
 }
 
