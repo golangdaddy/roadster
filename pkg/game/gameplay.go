@@ -5,6 +5,7 @@ import (
 	"image/color"
 	"math"
 	"math/rand"
+	"sort"
 	"sync"
 	"time"
 
@@ -1272,6 +1273,33 @@ func (gs *GameplayScreen) updateTraffic(scrollSpeed float64, currentSegment Road
 			gs.traffic = append(gs.traffic[:i], gs.traffic[i+1:]...)
 			i--
 			continue
+		}
+	}
+
+	// Enforce ordering within each lane so cars never overtake
+	laneCars := make(map[int][]*TrafficCar)
+	for _, tc := range gs.traffic {
+		laneCars[tc.Lane] = append(laneCars[tc.Lane], tc)
+	}
+
+	for _, cars := range laneCars {
+		sort.Slice(cars, func(i, j int) bool {
+			return cars[i].Y < cars[j].Y // smaller Y is further ahead
+		})
+
+		for i := 1; i < len(cars); i++ {
+			ahead := cars[i-1]
+			behind := cars[i]
+
+			minAllowedY := ahead.Y + minTrafficDistance
+			if behind.Y < minAllowedY {
+				behind.Y = minAllowedY
+			}
+
+			// Ensure the car behind is not faster than the car ahead
+			if behind.VelocityY > ahead.VelocityY {
+				behind.VelocityY = ahead.VelocityY
+			}
 		}
 	}
 	gs.trafficMutex.Unlock()
