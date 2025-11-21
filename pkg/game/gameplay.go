@@ -24,9 +24,10 @@ const MPHPerPixelPerFrame = 12.5
 
 // Traffic constants
 const (
-	minTrafficDistance = 150.0 // Minimum distance between traffic vehicles in pixels
-	trafficVariation   = 0.2   // 20% random variation on distance
-	trafficSpawnRange  = 5000.0 // Range ahead/behind player to spawn traffic (well off-screen)
+	minTrafficDistance     = 150.0 // Minimum distance between traffic vehicles in pixels
+	trafficVariation       = 0.2   // 20% random variation on distance
+	trafficSpawnRange      = 3000.0 // Range ahead/behind player to spawn traffic
+	trafficSpawnProbability = 0.15 // Chance to spawn a car for a lane/direction (reduced to help hit speed limits)
 )
 
 // TrafficCar represents a traffic vehicle
@@ -35,6 +36,8 @@ type TrafficCar struct {
 	VelocityY    float64    // Vertical velocity (current speed)
 	TargetSpeed  float64    // Desired speed (based on speed limit)
 	Lane         int        // Which lane this car is in
+	TargetLane   int        // Lane moving towards (if changing)
+	LaneProgress float64    // 0.0 to 1.0 for visual transition
 	Color        color.RGBA // Car color for variety
 	stopAI       chan bool  // Channel to stop the AI behavior goroutine
 }
@@ -73,6 +76,8 @@ func (tc *TrafficCar) updateBehavior(gs *GameplayScreen) {
 	minDist := 10000.0
 	foundCarAhead := false
 	speedOfCarAhead := 0.0
+	
+	rightLaneBlocked := false
 
 	// Check against other traffic
 	gs.trafficMutex.RLock()
@@ -89,6 +94,13 @@ func (tc *TrafficCar) updateBehavior(gs *GameplayScreen) {
 					foundCarAhead = true
 					speedOfCarAhead = other.VelocityY
 				}
+			}
+		}
+		// Check if right lane is blocked (for lane change)
+		// Check if car is in target lane or moving to it
+		if other.Lane == tc.Lane+1 || (other.TargetLane == tc.Lane+1 && other.LaneProgress > 0) {
+			if math.Abs(tc.Y-other.Y) < minTrafficDistance*2.0 {
+				rightLaneBlocked = true
 			}
 		}
 	}
@@ -108,30 +120,44 @@ func (tc *TrafficCar) updateBehavior(gs *GameplayScreen) {
 			}
 		}
 	}
+	// Check player in right lane
+	// Assuming player X logic: lane 0 is around 40?
+	// If player X is in right lane range
+	// This is tricky without segment/lane math, but we can approximate or skip player check for lane change for now.
 
 	// Adjust speed based on distance
-	safeDistance := 200.0
+	safeDistance := minTrafficDistance * 1.5
 	if foundCarAhead && minDist < safeDistance {
-		// Brake to match speed or go slower
-		targetBrakingSpeed := speedOfCarAhead * 0.9
-		
-		// If very close, brake harder
-		if minDist < 100.0 {
-			targetBrakingSpeed = speedOfCarAhead * 0.5
+		// Match the car ahead, with extra braking if extremely close
+		targetSpeed := speedOfCarAhead
+		if minDist < minTrafficDistance {
+			targetSpeed = speedOfCarAhead * 0.85
 		}
-		
-		if tc.VelocityY > targetBrakingSpeed {
-			// Apply braking
-			tc.VelocityY -= 0.2
-			if tc.VelocityY < 0 {
-				tc.VelocityY = 0
+		if minDist < minTrafficDistance*0.5 {
+			targetSpeed = speedOfCarAhead * 0.6
+		}
+		if targetSpeed < 0 {
+			targetSpeed = 0
+		}
+		// Smoothly approach target speed
+		tc.VelocityY += (targetSpeed - tc.VelocityY) * 0.5
+		if tc.VelocityY < 0 {
+			tc.VelocityY = 0
+		}
+	} else {
+		// Quickly restore to lane speed limit
+		tc.VelocityY += (tc.TargetSpeed - tc.VelocityY) * 0.4
+	}
+	
+	// Attempt lane change to faster lane (right)
+	if !rightLaneBlocked && tc.LaneProgress == 0 && tc.TargetLane == 0 {
+		// 1% chance per tick to consider changing
+		if rand.Float64() < 0.01 {
+			segment := gs.getSegmentAt(tc.Y)
+			if tc.Lane+1 < segment.LaneCount {
+				tc.TargetLane = tc.Lane + 1
+				tc.LaneProgress = 0.01 // Start transition
 			}
-		}
-	} else if tc.VelocityY < tc.TargetSpeed {
-		// Accelerate back to target speed if safe
-		tc.VelocityY += 0.1
-		if tc.VelocityY > tc.TargetSpeed {
-			tc.VelocityY = tc.TargetSpeed
 		}
 	}
 }
@@ -373,13 +399,10 @@ func (gs *GameplayScreen) Update() error {
 
 	// Scroll the road (move road downward to create forward movement illusion)
 	scrollSpeed := gs.playerCar.VelocityY
-	for i := range gs.roadSegments {
-		gs.roadSegments[i].Y += scrollSpeed
-	}
-
+	
 	// Update car position (car moves upward toward top of screen)
 	gs.playerCar.Y -= scrollSpeed
-
+	
 	// Update traffic
 	gs.updateTraffic(scrollSpeed, currentSegment, laneWidth)
 
@@ -1157,6 +1180,19 @@ func (gs *GameplayScreen) getCurrentRoadSegment() RoadSegment {
 	return RoadSegment{LaneCount: 1, RoadTypes: []string{"A"}, StartLaneIndex: 0, Y: 0}
 }
 
+// getSegmentAt finds the road segment at a specific Y position
+func (gs *GameplayScreen) getSegmentAt(y float64) RoadSegment {
+	for _, segment := range gs.roadSegments {
+		if y <= segment.Y && y > segment.Y-600 {
+			return segment
+		}
+	}
+	if len(gs.roadSegments) > 0 {
+		return gs.roadSegments[0]
+	}
+	return RoadSegment{LaneCount: 1, RoadTypes: []string{"A"}, StartLaneIndex: 0, Y: 0}
+}
+
 // getCurrentLane determines which lane the car is currently in
 func (gs *GameplayScreen) getCurrentLane(segment RoadSegment, laneWidth float64) int {
 	// Calculate the left edge of the road segment
@@ -1225,6 +1261,21 @@ func (gs *GameplayScreen) checkCollisions() bool {
 	return false
 }
 
+// getSegmentAtY finds the road segment at a given world Y position
+func (gs *GameplayScreen) getSegmentAtY(y float64) RoadSegment {
+	// Segments are ordered by decreasing Y
+	for _, segment := range gs.roadSegments {
+		if y <= segment.Y && y > segment.Y - 600 {
+			return segment
+		}
+	}
+	// Fallback
+	if len(gs.roadSegments) > 0 {
+		return gs.roadSegments[0]
+	}
+	return RoadSegment{LaneCount: 1, RoadTypes: []string{"A"}, StartLaneIndex: 0, Y: 0}
+}
+
 // resetToStart resets the player to the start of the level
 func (gs *GameplayScreen) resetToStart() {
 	// Reset player position
@@ -1252,7 +1303,6 @@ func (gs *GameplayScreen) resetToStart() {
 // updateTraffic updates traffic positions and spawns new traffic vehicles
 func (gs *GameplayScreen) updateTraffic(scrollSpeed float64, currentSegment RoadSegment, laneWidth float64) {
 	playerY := gs.playerCar.Y
-	playerVelocityY := gs.playerCar.VelocityY
 	
 	// Update existing traffic positions
 	gs.trafficMutex.Lock()
@@ -1261,9 +1311,8 @@ func (gs *GameplayScreen) updateTraffic(scrollSpeed float64, currentSegment Road
 		
 		// Traffic moves relative to player: if traffic is slower, it moves up (toward player)
 		// If traffic is faster, it moves down (away from player)
-		// Since Y decreases upward, we subtract the relative speed
-		relativeSpeed := tc.VelocityY - playerVelocityY
-		tc.Y -= relativeSpeed
+		// Since Y decreases upward, we subtract the absolute speed to move up
+		tc.Y -= tc.VelocityY
 		
 		// Remove traffic that's too far off screen (beyond spawn range)
 		if tc.Y > playerY+trafficSpawnRange+500 || tc.Y < playerY-trafficSpawnRange-500 {
@@ -1320,9 +1369,11 @@ func (gs *GameplayScreen) spawnInitialTraffic() {
 	
 	// Spawn traffic in each lane (skip lane 0)
 	for lane := 1; lane < segment.LaneCount; lane++ {
-		// Spawn fewer vehicles ahead and behind (reduced from 3 to 2)
-		for i := 0; i < 2; i++ {
+		// Spawn at most one vehicle ahead and behind with probability to keep density low
+		if rand.Float64() < trafficSpawnProbability {
 			gs.spawnTrafficInDirection(segment, laneWidth, playerY, lane, true)
+		}
+		if rand.Float64() < trafficSpawnProbability {
 			gs.spawnTrafficInDirection(segment, laneWidth, playerY, lane, false)
 		}
 	}
@@ -1335,11 +1386,12 @@ func (gs *GameplayScreen) spawnTraffic(segment RoadSegment, laneWidth float64, p
 	
 	// Check each lane for traffic spawning (skip lane 0)
 	for lane := 1; lane < segment.LaneCount; lane++ {
-		// Check if we need to spawn traffic ahead (above player)
-		gs.spawnTrafficInDirection(segment, laneWidth, playerY, lane, true)
-		
-		// Check if we need to spawn traffic behind (below player)
-		gs.spawnTrafficInDirection(segment, laneWidth, playerY, lane, false)
+		if rand.Float64() < trafficSpawnProbability {
+			gs.spawnTrafficInDirection(segment, laneWidth, playerY, lane, true)
+		}
+		if rand.Float64() < trafficSpawnProbability {
+			gs.spawnTrafficInDirection(segment, laneWidth, playerY, lane, false)
+		}
 	}
 }
 
@@ -1366,31 +1418,18 @@ func (gs *GameplayScreen) spawnTrafficInDirection(segment RoadSegment, laneWidth
 	var minY, maxY float64
 	if ahead {
 		// Spawn ahead (above player, lower Y values)
-		// Spawn between 1500-5000px ahead of player (well off-screen)
+		// Spawn between 3000px and 800px ahead
 		minY = playerY - trafficSpawnRange
-		maxY = playerY - 1500 // Don't spawn too close to player (well off-screen)
+		maxY = playerY - 800
 	} else {
 		// Spawn behind (below player, higher Y values)
-		// Spawn between 1500-5000px behind player (well off-screen)
-		minY = playerY + 1500 // Don't spawn too close to player (well off-screen)
+		// Spawn between 800px and 3000px behind
+		minY = playerY + 800
 		maxY = playerY + trafficSpawnRange
 	}
 	
-	// Generate a candidate spawn position
-	var spawnY float64
-	if ahead {
-		// Spawn ahead of player (well off-screen)
-		spawnY = playerY - 1500 - minTrafficDistance*float64(rand.Intn(10))
-		// Clamp to range
-		if spawnY < minY { spawnY = minY }
-		if spawnY > maxY { spawnY = maxY }
-	} else {
-		// Spawn behind player (well off-screen)
-		spawnY = playerY + 1500 + minTrafficDistance*float64(rand.Intn(10))
-		// Clamp to range
-		if spawnY < minY { spawnY = minY }
-		if spawnY > maxY { spawnY = maxY }
-	}
+	// Generate a candidate spawn position uniformly in range
+	spawnY := minY + rand.Float64()*(maxY-minY)
 	
 	// Check if the candidate position is safe (maintaining minimum distance)
 	isSafe := true
@@ -1406,20 +1445,14 @@ func (gs *GameplayScreen) spawnTrafficInDirection(segment RoadSegment, laneWidth
 		return
 	}
 	
-	// 50% chance to spawn (reduces overall traffic density)
-	if rand.Float64() < 0.5 {
-		return
-	}
-	
 	// Calculate lane center X position
 	leftEdge := -float64(segment.StartLaneIndex) * laneWidth
 	laneCenterX := leftEdge + float64(lane)*laneWidth + laneWidth/2
 	
-	// Determine traffic speed (5 MPH slower than speed limit)
-	speedLimitMPH := 50.0 + float64(lane)*10.0
-	// Target speed is 5 MPH less than limit, with small variation (+/- 2 MPH)
-	trafficSpeedMPH := (speedLimitMPH - 5.0) + (rand.Float64()*4.0 - 2.0)
-	trafficVelocityY := trafficSpeedMPH / MPHPerPixelPerFrame
+	// Determine traffic speed (exact lane speed limit)
+	// Lane 0=50, Lane 1=65, Lane 2=80, etc. (15mph steps for visibility)
+	speedLimitMPH := 50.0 + float64(lane)*15.0
+	trafficVelocityY := speedLimitMPH / MPHPerPixelPerFrame
 	
 	// Random car colors for variety
 	colors := []color.RGBA{
@@ -1437,7 +1470,7 @@ func (gs *GameplayScreen) spawnTrafficInDirection(segment RoadSegment, laneWidth
 		X:           laneCenterX,
 		Y:           spawnY,
 		VelocityY:   trafficVelocityY,
-		TargetSpeed: trafficVelocityY, // Initially set target to spawned speed
+		TargetSpeed: trafficVelocityY,
 		Lane:        lane,
 		Color:       carColor,
 	}
@@ -1583,6 +1616,10 @@ func (gs *GameplayScreen) drawTraffic(screen *ebiten.Image) {
 		op := &ebiten.DrawImageOptions{}
 		op.GeoM.Translate(screenX, screenY)
 		screen.DrawImage(carImg, op)
+		
+		// Debug: Draw speed
+		speedMPH := tc.VelocityY * MPHPerPixelPerFrame
+		ebitenutil.DebugPrintAt(screen, fmt.Sprintf("%.0f", speedMPH), int(screenX), int(screenY)-15)
 	}
 }
 
