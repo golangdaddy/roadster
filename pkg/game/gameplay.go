@@ -23,7 +23,7 @@ const MPHPerPixelPerFrame = 12.5
 
 // Traffic constants
 const (
-	minTrafficDistance = 300.0 // Minimum distance between traffic vehicles in pixels
+	minTrafficDistance = 150.0 // Minimum distance between traffic vehicles in pixels
 	trafficVariation   = 0.2   // 20% random variation on distance
 	trafficSpawnRange  = 5000.0 // Range ahead/behind player to spawn traffic (well off-screen)
 )
@@ -109,13 +109,13 @@ func (tc *TrafficCar) updateBehavior(gs *GameplayScreen) {
 	}
 
 	// Adjust speed based on distance
-	safeDistance := 400.0
+	safeDistance := 200.0
 	if foundCarAhead && minDist < safeDistance {
 		// Brake to match speed or go slower
 		targetBrakingSpeed := speedOfCarAhead * 0.9
 		
 		// If very close, brake harder
-		if minDist < 200.0 {
+		if minDist < 100.0 {
 			targetBrakingSpeed = speedOfCarAhead * 0.5
 		}
 		
@@ -1382,10 +1382,10 @@ func (gs *GameplayScreen) spawnTrafficInDirection(segment RoadSegment, laneWidth
 	leftEdge := -float64(segment.StartLaneIndex) * laneWidth
 	laneCenterX := leftEdge + float64(lane)*laneWidth + laneWidth/2
 	
-	// Determine traffic speed (slightly slower than speed limit for realism)
+	// Determine traffic speed (5 MPH slower than speed limit)
 	speedLimitMPH := 50.0 + float64(lane)*10.0
-	// Traffic drives at 80-95% of speed limit
-	trafficSpeedMPH := speedLimitMPH * (0.8 + rand.Float64()*0.15)
+	// Target speed is 5 MPH less than limit, with small variation (+/- 2 MPH)
+	trafficSpeedMPH := (speedLimitMPH - 5.0) + (rand.Float64()*4.0 - 2.0)
 	trafficVelocityY := trafficSpeedMPH / MPHPerPixelPerFrame
 	
 	// Random car colors for variety
