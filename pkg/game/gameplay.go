@@ -17,10 +17,10 @@ import (
 )
 
 // MPHPerPixelPerFrame is the conversion factor from pixels per frame to MPH
-// At 60 FPS, max speed of 8 pixels/frame = 480 pixels/second
-// Setting max speed to 100 MPH gives us: 8 pixels/frame = 100 MPH
-// Therefore: 1 pixel/frame = 12.5 MPH
-const MPHPerPixelPerFrame = 12.5
+// At 60 FPS, max speed of 10.4 pixels/frame (was 8)
+// Setting max speed to 100 MPH gives us: 10.4 pixels/frame = 100 MPH
+// Therefore: 1 pixel/frame = 9.6 MPH (adjusted to make car 30% faster)
+const MPHPerPixelPerFrame = 9.6
 
 // Traffic constants
 const (
