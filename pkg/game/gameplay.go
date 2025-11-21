@@ -1292,8 +1292,8 @@ func (gs *GameplayScreen) spawnInitialTraffic() {
 	
 	// Spawn traffic in each lane (skip lane 0)
 	for lane := 1; lane < segment.LaneCount; lane++ {
-		// Spawn a few vehicles ahead and behind
-		for i := 0; i < 3; i++ {
+		// Spawn fewer vehicles ahead and behind (reduced from 3 to 2)
+		for i := 0; i < 2; i++ {
 			gs.spawnTrafficInDirection(segment, laneWidth, playerY, lane, true)
 			gs.spawnTrafficInDirection(segment, laneWidth, playerY, lane, false)
 		}
@@ -1375,6 +1375,11 @@ func (gs *GameplayScreen) spawnTrafficInDirection(segment RoadSegment, laneWidth
 	
 	// If not safe, don't spawn
 	if !isSafe {
+		return
+	}
+	
+	// 50% chance to spawn (reduces overall traffic density)
+	if rand.Float64() < 0.5 {
 		return
 	}
 	
