@@ -458,8 +458,9 @@ func (gs *GameplayScreen) Update() error {
 
 // Draw renders the gameplay screen
 func (gs *GameplayScreen) Draw(screen *ebiten.Image) {
-	// Clear screen with sky color (retro blue)
+	// Clear screen with sky color (retro blue) - ensure full coverage
 	screen.Fill(color.RGBA{135, 206, 235, 255}) // Sky blue
+
 
 	// Draw road segments
 	gs.drawRoad(screen)
@@ -578,9 +579,7 @@ func (gs *GameplayScreen) generateBackgroundPattern() {
 	// Trees will be drawn dynamically per segment based on road position
 	// We'll just generate the grass pattern here
 	
-	// Add water course in middle section (spans full width)
-	waterY := patternHeight / 3
-	gs.drawWaterToPattern(pattern, 0.0, float64(patternWidth), float64(waterY))
+	// No water - just grass background
 	
 	gs.backgroundPattern = pattern
 }
@@ -645,22 +644,6 @@ func (gs *GameplayScreen) drawTreeToPattern(pattern *ebiten.Image, x, y float64,
 	}
 }
 
-// drawWaterToPattern draws water to the pattern
-func (gs *GameplayScreen) drawWaterToPattern(pattern *ebiten.Image, leftX, rightX, y float64) {
-	waterHeight := 25.0
-	waterColor := color.RGBA{30, 144, 255, 255}
-	
-	for wy := 0; wy < int(waterHeight); wy++ {
-		for wx := int(leftX); wx < int(rightX); wx++ {
-			if wx >= 0 && wx < pattern.Bounds().Dx() {
-				py := int(y) + wy
-				if py >= 0 && py < pattern.Bounds().Dy() {
-					pattern.Set(wx, py, waterColor)
-				}
-			}
-		}
-	}
-}
 
 // drawDecorativeLayer draws the repeating background pattern with trees positioned relative to road
 func (gs *GameplayScreen) drawDecorativeLayer(screen *ebiten.Image, segment RoadSegment, screenY float64, roadX float64, laneWidth float64) {
@@ -914,87 +897,6 @@ func (gs *GameplayScreen) drawTree(screen *ebiten.Image, x, y float64, seed int,
 	screen.DrawImage(treeImg, op)
 }
 
-// drawWaterCourse draws a water feature (river or stream)
-func (gs *GameplayScreen) drawWaterCourse(screen *ebiten.Image, leftX, rightX, y float64, seed int) {
-	waterWidth := rightX - leftX
-	waterHeight := 30.0
-	
-	// Water color (blue, varies slightly)
-	waterColors := []color.RGBA{
-		{30, 144, 255, 255},  // Dodger blue
-		{0, 191, 255, 255},   // Deep sky blue
-		{70, 130, 180, 255},  // Steel blue
-		{100, 149, 237, 255}, // Cornflower blue
-	}
-	// Ensure seed is positive for array indexing
-	positiveSeed := seed
-	if positiveSeed < 0 {
-		positiveSeed = -positiveSeed
-	}
-	baseWaterColor := waterColors[positiveSeed%len(waterColors)]
-	
-	// Draw water with some variation
-	for wy := 0; wy < int(waterHeight); wy++ {
-		for wx := 0; wx < int(waterWidth); wx++ {
-			screenX := int(leftX) + wx
-			screenY := int(y) + wy
-			
-			if screenX >= 0 && screenX < gs.screenWidth && screenY >= 0 && screenY < gs.screenHeight {
-				// Add some variation for water effect
-				variation := (wx + wy + seed) % 10
-				waterColor := color.RGBA{
-					uint8(math.Min(255, float64(baseWaterColor.R)+float64(variation))),
-					uint8(math.Min(255, float64(baseWaterColor.G)+float64(variation))),
-					uint8(math.Min(255, float64(baseWaterColor.B)+float64(variation))),
-					255,
-				}
-				screen.Set(screenX, screenY, waterColor)
-			}
-		}
-	}
-	
-	// Draw water edges (slightly darker)
-	edgeColor := color.RGBA{
-		uint8(math.Max(0, float64(baseWaterColor.R)-30)),
-		uint8(math.Max(0, float64(baseWaterColor.G)-30)),
-		uint8(math.Max(0, float64(baseWaterColor.B)-30)),
-		255,
-	}
-	
-	// Top and bottom edges
-	for wx := 0; wx < int(waterWidth); wx++ {
-		screenX := int(leftX) + wx
-		if screenX >= 0 && screenX < gs.screenWidth {
-			// Top edge
-			screenY := int(y)
-			if screenY >= 0 && screenY < gs.screenHeight {
-				screen.Set(screenX, screenY, edgeColor)
-			}
-			// Bottom edge
-			screenY = int(y) + int(waterHeight) - 1
-			if screenY >= 0 && screenY < gs.screenHeight {
-				screen.Set(screenX, screenY, edgeColor)
-			}
-		}
-	}
-	
-	// Left and right edges
-	for wy := 0; wy < int(waterHeight); wy++ {
-		screenY := int(y) + wy
-		if screenY >= 0 && screenY < gs.screenHeight {
-			// Left edge
-			screenX := int(leftX)
-			if screenX >= 0 && screenX < gs.screenWidth {
-				screen.Set(screenX, screenY, edgeColor)
-			}
-			// Right edge
-			screenX = int(rightX) - 1
-			if screenX >= 0 && screenX < gs.screenWidth {
-				screen.Set(screenX, screenY, edgeColor)
-			}
-		}
-	}
-}
 
 // drawCar renders the player's car
 func (gs *GameplayScreen) drawCar(screen *ebiten.Image) {
@@ -1432,59 +1334,19 @@ func (gs *GameplayScreen) spawnTraffic(segment RoadSegment, laneWidth float64, p
 		return
 	}
 
-	// Decide how many lanes to attempt spawning in this cycle (1-3 lanes randomly)
-	numLanesToTry := rand.Intn(3) + 1
-
-	// Randomly select which lanes to try (skip lane 0)
-	availableLanes := make([]int, 0, segment.LaneCount-1)
+	// Consistent spawning: try each lane in sequence
 	for lane := 1; lane < segment.LaneCount; lane++ {
-		availableLanes = append(availableLanes, lane)
-	}
-
-	// Shuffle and pick lanes to try
-	rand.Shuffle(len(availableLanes), func(i, j int) {
-		availableLanes[i], availableLanes[j] = availableLanes[j], availableLanes[i]
-	})
-
-	for i := 0; i < numLanesToTry && i < len(availableLanes); i++ {
-		lane := availableLanes[i]
-
-		// Lane-specific spawn probability (some lanes busier than others)
+		// Consistent probability for each lane
 		baseProbability := trafficSpawnProbability
-		// Rightmost lanes slightly busier
-		if lane == segment.LaneCount-1 {
-			baseProbability *= 1.3
-		} else if lane == 1 {
-			baseProbability *= 0.8 // Left lanes slightly quieter
-		}
 
-		// Random chance to spawn ahead
+		// Always try to spawn ahead first (more visible)
 		if rand.Float64() < baseProbability {
 			gs.spawnTrafficInDirection(segment, laneWidth, playerY, lane, true)
 		}
 
-		// Random chance to spawn behind (lower probability)
-		if rand.Float64() < baseProbability * 0.6 {
+		// Lower chance to spawn behind
+		if rand.Float64() < baseProbability * 0.4 {
 			gs.spawnTrafficInDirection(segment, laneWidth, playerY, lane, false)
-		}
-	}
-
-	// Occasionally spawn traffic clusters (2-3 cars at once in nearby lanes)
-	// Only spawn clusters if we have at least 2 lanes
-	if rand.Float64() < 0.1 && segment.LaneCount >= 3 { // 10% chance, but only on multi-lane roads
-		clusterSize := rand.Intn(2) + 2 // 2-3 cars
-		clusterLane := rand.Intn(segment.LaneCount-2) + 1 // Avoid lane 0 and ensure valid range
-
-		for i := 0; i < clusterSize; i++ {
-			// Try adjacent lanes for cluster
-			actualLane := clusterLane + (rand.Intn(3) - 1) // -1, 0, or +1 from clusterLane
-			if actualLane >= 1 && actualLane < segment.LaneCount {
-				// Higher chance to spawn for cluster
-				if rand.Float64() < 0.7 {
-					direction := rand.Intn(2) == 0 // Random direction
-					gs.spawnTrafficInDirection(segment, laneWidth, playerY, actualLane, direction)
-				}
-			}
 		}
 	}
 }
