@@ -5,6 +5,7 @@ import (
 	"image/color"
 	"math"
 	"math/rand"
+	"sync"
 	"time"
 
 	"github.com/golangdaddy/roadster/pkg/models/car"
@@ -71,9 +72,7 @@ func (tc *TrafficCar) updateBehavior(gs *GameplayScreen) {
 	foundCarAhead := false
 
 	// Check against other traffic
-	// Note: accessing gs.traffic is not thread-safe here strictly speaking
-	// but for this simple game it might be acceptable or we'd need a mutex.
-	// Given the requirement, we'll proceed.
+	gs.trafficMutex.RLock()
 	for _, other := range gs.traffic {
 		if other == tc {
 			continue
@@ -89,6 +88,7 @@ func (tc *TrafficCar) updateBehavior(gs *GameplayScreen) {
 			}
 		}
 	}
+	gs.trafficMutex.RUnlock()
 
 	// Check against player
 	// Simple lane check based on X distance
@@ -141,6 +141,7 @@ type GameplayScreen struct {
 	roadSegments []RoadSegment
 	playerCar    *Car
 	traffic      []*TrafficCar // Traffic vehicles
+	trafficMutex sync.RWMutex  // Mutex for safe concurrent access to traffic
 	scrollSpeed  float64
 	roadTextures map[string]*ebiten.Image
 	screenWidth  int
@@ -1187,6 +1188,8 @@ func (gs *GameplayScreen) checkCollisions() bool {
 	playerYBottom := playerCollisionY + collisionHeight/2
 	
 	// Check collision with each traffic vehicle
+	gs.trafficMutex.RLock()
+	defer gs.trafficMutex.RUnlock()
 	for _, tc := range gs.traffic {
 		// Traffic car world X position (using smaller collision box)
 		trafficLeft := tc.X - collisionWidth/2
@@ -1238,6 +1241,7 @@ func (gs *GameplayScreen) updateTraffic(scrollSpeed float64, currentSegment Road
 	playerVelocityY := gs.playerCar.VelocityY
 	
 	// Update existing traffic positions
+	gs.trafficMutex.Lock()
 	for i := 0; i < len(gs.traffic); i++ {
 		tc := gs.traffic[i]
 		
@@ -1257,6 +1261,7 @@ func (gs *GameplayScreen) updateTraffic(scrollSpeed float64, currentSegment Road
 			continue
 		}
 	}
+	gs.trafficMutex.Unlock()
 	
 	// Spawn new traffic vehicles
 	gs.spawnTraffic(currentSegment, laneWidth, playerY)
@@ -1301,6 +1306,8 @@ func (gs *GameplayScreen) spawnTraffic(segment RoadSegment, laneWidth float64, p
 func (gs *GameplayScreen) spawnTrafficInDirection(segment RoadSegment, laneWidth float64, playerY float64, lane int, ahead bool) {
 	// Find existing traffic in this lane
 	var laneTraffic []*TrafficCar
+	
+	gs.trafficMutex.RLock()
 	for _, tc := range gs.traffic {
 		// Check if traffic is in this lane (within lane bounds)
 		leftEdge := -float64(segment.StartLaneIndex) * laneWidth
@@ -1311,6 +1318,7 @@ func (gs *GameplayScreen) spawnTrafficInDirection(segment RoadSegment, laneWidth
 			laneTraffic = append(laneTraffic, tc)
 		}
 	}
+	gs.trafficMutex.RUnlock()
 	
 	// Determine spawn range - spawn well off-screen
 	// Screen height is 600, so we want to spawn at least 1000px away from player
@@ -1400,12 +1408,17 @@ func (gs *GameplayScreen) spawnTrafficInDirection(segment RoadSegment, laneWidth
 	// Start AI behavior
 	newTraffic.StartAI(gs)
 	
+	gs.trafficMutex.Lock()
 	gs.traffic = append(gs.traffic, newTraffic)
+	gs.trafficMutex.Unlock()
 }
 
 // drawTraffic renders all traffic vehicles
 func (gs *GameplayScreen) drawTraffic(screen *ebiten.Image) {
 	carWidth, carHeight := 40, 64
+	
+	gs.trafficMutex.RLock()
+	defer gs.trafficMutex.RUnlock()
 	
 	for _, tc := range gs.traffic {
 		// Calculate screen position relative to player car
