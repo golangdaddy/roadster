@@ -89,8 +89,25 @@ func (tc *TrafficCar) Update(gs *GameplayScreen) {
 	}
 
 	// Check against player
-	// Simple lane check based on X distance
 	laneWidth := 80.0
+	
+	// Check if player blocks adjacent lanes for lane changing
+	// Calculate player's lane index relative to traffic's current segment
+	tcSegment := gs.getSegmentAt(tc.Y)
+	segLeftEdge := -float64(tcSegment.StartLaneIndex) * laneWidth
+	playerLane := int((gs.playerCar.X - segLeftEdge) / laneWidth)
+	
+	// Check if player is close enough to block a lane change
+	if math.Abs(tc.Y - gs.playerCar.Y) < minTrafficDistance*2.0 {
+		if playerLane == tc.Lane + 1 {
+			rightLaneBlocked = true
+		}
+		if playerLane == tc.Lane - 1 {
+			leftLaneBlocked = true
+		}
+	}
+
+	// Simple lane check based on X distance
 	if math.Abs(gs.playerCar.X - tc.X) < laneWidth/2 {
 		// Player is in roughly the same lane
 		if gs.playerCar.Y < tc.Y {
