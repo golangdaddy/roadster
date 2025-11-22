@@ -39,39 +39,10 @@ type TrafficCar struct {
 	TargetLane   int        // Lane moving towards (if changing)
 	LaneProgress float64    // 0.0 to 1.0 for visual transition
 	Color        color.RGBA // Car color for variety
-	stopAI       chan bool  // Channel to stop the AI behavior goroutine
 }
 
-// StartAI starts the behavior goroutine for this traffic car
-func (tc *TrafficCar) StartAI(gs *GameplayScreen) {
-	tc.stopAI = make(chan bool)
-	go func() {
-		// Check more frequently (30ms) for smoother reaction
-		ticker := time.NewTicker(30 * time.Millisecond)
-		defer ticker.Stop()
-
-		for {
-			select {
-			case <-tc.stopAI:
-				return
-			case <-ticker.C:
-				tc.updateBehavior(gs)
-			}
-		}
-	}()
-}
-
-// StopAI stops the behavior goroutine
-func (tc *TrafficCar) StopAI() {
-	if tc.stopAI != nil {
-		tc.stopAI <- true
-		close(tc.stopAI)
-		tc.stopAI = nil
-	}
-}
-
-// updateBehavior runs the AI logic to maintain safe distance
-func (tc *TrafficCar) updateBehavior(gs *GameplayScreen) {
+// Update runs the AI logic to maintain safe distance
+func (tc *TrafficCar) Update(gs *GameplayScreen) {
 	// Safety check: skip AI updates if coordinates are extreme to prevent panics
 	if math.Abs(tc.Y) > 100000 || math.Abs(gs.playerCar.Y) > 100000 {
 		return
@@ -85,7 +56,6 @@ func (tc *TrafficCar) updateBehavior(gs *GameplayScreen) {
 	rightLaneBlocked := false
 
 	// Check against other traffic
-	gs.trafficMutex.RLock()
 	for _, other := range gs.traffic {
 		if other == tc {
 			continue
@@ -109,7 +79,6 @@ func (tc *TrafficCar) updateBehavior(gs *GameplayScreen) {
 			}
 		}
 	}
-	gs.trafficMutex.RUnlock()
 
 	// Check against player
 	// Simple lane check based on X distance
@@ -156,8 +125,8 @@ func (tc *TrafficCar) updateBehavior(gs *GameplayScreen) {
 	
 	// Attempt lane change to faster lane (right)
 	if !rightLaneBlocked && tc.LaneProgress == 0 && tc.TargetLane == 0 {
-		// 1% chance per tick to consider changing
-		if rand.Float64() < 0.01 {
+		// 0.5% chance per tick to consider changing (reduced from 1% due to 60Hz update)
+		if rand.Float64() < 0.005 {
 			segment := gs.getSegmentAt(tc.Y)
 			if tc.Lane+1 < segment.LaneCount {
 				tc.TargetLane = tc.Lane + 1
@@ -320,7 +289,7 @@ func (gs *GameplayScreen) generateRoadFromLevel(levelData *LevelData) {
 
 // Update handles gameplay logic
 func (gs *GameplayScreen) Update() error {
-	currentSegment := gs.getCurrentRoadSegment()
+	currentSegment, segmentIdx := gs.getCurrentRoadSegment()
 	laneWidth := 80.0
 
 	// Check for end of level
@@ -411,9 +380,30 @@ func (gs *GameplayScreen) Update() error {
 	gs.playerCar.X += gs.playerCar.VelocityX
 
 	// Clamp car position to stay within road bounds
-	// Calculate the road boundaries based on current segment
+	// Calculate the road boundaries based on current segment with interpolation for ramps
 	leftEdge := -float64(currentSegment.StartLaneIndex) * laneWidth
 	rightEdge := leftEdge + float64(currentSegment.LaneCount)*laneWidth
+	
+	// Interpolate with previous segment if we are in a transition
+	if segmentIdx > 0 {
+		prevSegment := gs.roadSegments[segmentIdx-1]
+		
+		// Calculate progress through current segment (0.0 at start/bottom, 1.0 at end/top)
+		segmentHeight := 600.0
+		progress := (currentSegment.Y - gs.playerCar.Y) / segmentHeight
+		
+		// Clamp progress
+		if progress < 0 { progress = 0 }
+		if progress > 1 { progress = 1 }
+		
+		// Calculate previous segment bounds
+		prevLeftEdge := -float64(prevSegment.StartLaneIndex) * laneWidth
+		prevRightEdge := prevLeftEdge + float64(prevSegment.LaneCount)*laneWidth
+		
+		// Interpolate edges
+		leftEdge = prevLeftEdge + (leftEdge - prevLeftEdge) * progress
+		rightEdge = prevRightEdge + (rightEdge - prevRightEdge) * progress
+	}
 	
 	if gs.playerCar.X < leftEdge+10 {
 		gs.playerCar.X = leftEdge + 10
@@ -1231,31 +1221,32 @@ func (gs *GameplayScreen) drawSteeringIndicator(screen *ebiten.Image) {
 	ebitenutil.DebugPrintAt(screen, label, gs.screenWidth-150, gs.screenHeight-25)
 }
 
-// getCurrentRoadSegment finds the road segment the car is currently on
-func (gs *GameplayScreen) getCurrentRoadSegment() RoadSegment {
+// getCurrentRoadSegment finds the road segment the car is currently on and its index
+func (gs *GameplayScreen) getCurrentRoadSegment() (RoadSegment, int) {
 	// Find the segment closest to the car's Y position
 	// Since Y decreases as we go up, we need to find the segment where carY is between segment.Y and segment.Y-600
 	carWorldY := gs.playerCar.Y
 
-	for _, segment := range gs.roadSegments {
+	for i, segment := range gs.roadSegments {
 		if carWorldY <= segment.Y && carWorldY > segment.Y-600 {
-			return segment
+			return segment, i
 		}
 	}
 
 	// If no segment found and we have segments, check if player is beyond the last segment
 	if len(gs.roadSegments) > 0 {
-		lastSegment := gs.roadSegments[len(gs.roadSegments)-1]
+		lastIdx := len(gs.roadSegments) - 1
+		lastSegment := gs.roadSegments[lastIdx]
 		if carWorldY <= lastSegment.Y - 600 {
 			// Player is beyond the last segment - use the last segment as reference
-			return lastSegment
+			return lastSegment, lastIdx
 		}
 		// Player is before the first segment - use the first segment
-		return gs.roadSegments[0]
+		return gs.roadSegments[0], 0
 	}
 
 	// Fallback
-	return RoadSegment{LaneCount: 1, RoadTypes: []string{"A"}, StartLaneIndex: 0, Y: 0}
+	return RoadSegment{LaneCount: 1, RoadTypes: []string{"A"}, StartLaneIndex: 0, Y: 0}, -1
 }
 
 // getSegmentAt finds the road segment at a specific Y position
@@ -1385,9 +1376,6 @@ func (gs *GameplayScreen) resetToStart() {
 
 // cleanupTraffic stops all AI goroutines and clears traffic
 func (gs *GameplayScreen) cleanupTraffic() {
-	for _, tc := range gs.traffic {
-		tc.StopAI()
-	}
 	gs.traffic = make([]*TrafficCar, 0)
 }
 
@@ -1405,15 +1393,51 @@ func (gs *GameplayScreen) updateTraffic(scrollSpeed float64, currentSegment Road
 		// Since Y decreases upward, we subtract the absolute speed to move up
 		tc.Y -= tc.VelocityY
 		
+		// Handle lane changing
+		if tc.LaneProgress > 0 {
+			// Increment progress
+			tc.LaneProgress += 0.05 // Speed of lane change
+			if tc.LaneProgress > 1.0 {
+				tc.LaneProgress = 1.0
+			}
+			
+			// Get traffic segment for accurate lane positioning
+			tcSegment := gs.getSegmentAt(tc.Y)
+			
+			// Calculate positions
+			leftEdge := -float64(tcSegment.StartLaneIndex) * laneWidth
+			startX := leftEdge + float64(tc.Lane)*laneWidth + laneWidth/2
+			endX := leftEdge + float64(tc.TargetLane)*laneWidth + laneWidth/2
+			
+			// Lerp X
+			tc.X = startX + (endX - startX) * tc.LaneProgress
+			
+			// Complete transition
+			if tc.LaneProgress >= 1.0 {
+				tc.Lane = tc.TargetLane
+				tc.TargetLane = 0
+				tc.LaneProgress = 0
+				
+				// Update TargetSpeed for new lane
+				lanePosition := tc.Lane
+				if tc.Lane < len(tcSegment.LanePositions) {
+					lanePosition = tcSegment.LanePositions[tc.Lane]
+				}
+				speedLimitMPH := 50.0 + float64(lanePosition)*10.0 - 5.0
+				tc.TargetSpeed = speedLimitMPH / MPHPerPixelPerFrame
+			}
+		}
+		
 		// Remove traffic that's too far off screen (beyond spawn range)
 		if tc.Y > playerY+trafficSpawnRange+500 || tc.Y < playerY-trafficSpawnRange-500 {
-			// Stop AI behavior
-			tc.StopAI()
 			// Remove from slice
 			gs.traffic = append(gs.traffic[:i], gs.traffic[i+1:]...)
 			i--
 			continue
 		}
+		
+		// Run AI logic
+		tc.Update(gs)
 	}
 
 	// Enforce ordering within each lane so cars never overtake
@@ -1562,10 +1586,10 @@ func (gs *GameplayScreen) spawnTrafficInDirection(segment RoadSegment, laneWidth
 		lanePosition = segment.LanePositions[lane]
 	}
 	
-	// Determine traffic speed (exact lane speed limit)
-	// Lane 0=50, Lane 1=65, Lane 2=80, etc. (15mph steps for visibility)
+	// Determine traffic speed (player speed limit minus 5mph)
+	// Lane 0=50, Lane 1=60, Lane 2=70, etc. (match player steps)
 	// Use character position for speed calculation
-	speedLimitMPH := 50.0 + float64(lanePosition)*15.0
+	speedLimitMPH := 50.0 + float64(lanePosition)*10.0 - 5.0
 	trafficVelocityY := speedLimitMPH / MPHPerPixelPerFrame
 	
 	// Random car colors for variety
@@ -1588,9 +1612,6 @@ func (gs *GameplayScreen) spawnTrafficInDirection(segment RoadSegment, laneWidth
 		Lane:        lane,
 		Color:       carColor,
 	}
-	
-	// Start AI behavior
-	newTraffic.StartAI(gs)
 	
 	gs.trafficMutex.Lock()
 	gs.traffic = append(gs.traffic, newTraffic)
@@ -1766,7 +1787,7 @@ func (gs *GameplayScreen) drawSpeedometer(screen *ebiten.Image) {
 	speedMPH := gs.playerCar.VelocityY * MPHPerPixelPerFrame
 	
 	// Get current lane and speed limit
-	currentSegment := gs.getCurrentRoadSegment()
+	currentSegment, _ := gs.getCurrentRoadSegment()
 	laneWidth := 80.0
 	currentLane := gs.getCurrentLane(currentSegment, laneWidth)
 	speedLimitMPH := 50.0 + float64(currentLane)*10.0
