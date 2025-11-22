@@ -39,6 +39,7 @@ type TrafficCar struct {
 	TargetLane   int        // Lane moving towards (if changing)
 	LaneProgress float64    // 0.0 to 1.0 for visual transition
 	Color        color.RGBA // Car color for variety
+	LastLaneChangeTime int64 // Timestamp of last lane change
 }
 
 // Update runs the AI logic to maintain safe distance
@@ -54,6 +55,7 @@ func (tc *TrafficCar) Update(gs *GameplayScreen) {
 	speedOfCarAhead := 0.0
 	
 	rightLaneBlocked := false
+	leftLaneBlocked := false
 
 	// Check against other traffic
 	for _, other := range gs.traffic {
@@ -76,6 +78,12 @@ func (tc *TrafficCar) Update(gs *GameplayScreen) {
 		if other.Lane == tc.Lane+1 || (other.TargetLane == tc.Lane+1 && other.LaneProgress > 0) {
 			if math.Abs(tc.Y-other.Y) < minTrafficDistance*2.0 {
 				rightLaneBlocked = true
+			}
+		}
+		// Check if left lane is blocked
+		if other.Lane == tc.Lane-1 || (other.TargetLane == tc.Lane-1 && other.LaneProgress > 0) {
+			if math.Abs(tc.Y-other.Y) < minTrafficDistance*2.0 {
+				leftLaneBlocked = true
 			}
 		}
 	}
@@ -123,14 +131,35 @@ func (tc *TrafficCar) Update(gs *GameplayScreen) {
 		tc.VelocityY += (tc.TargetSpeed - tc.VelocityY) * 0.4
 	}
 	
-	// Attempt lane change to faster lane (right)
-	if !rightLaneBlocked && tc.LaneProgress == 0 && tc.TargetLane == 0 {
+	// Attempt lane change
+	if tc.LaneProgress == 0 && tc.TargetLane == 0 {
+		// Cooldown check (2 seconds)
+		now := time.Now().UnixMilli()
+		if now-tc.LastLaneChangeTime < 2000 {
+			return
+		}
+
 		// 0.5% chance per tick to consider changing (reduced from 1% due to 60Hz update)
 		if rand.Float64() < 0.005 {
 			segment := gs.getSegmentAt(tc.Y)
-			if tc.Lane+1 < segment.LaneCount {
-				tc.TargetLane = tc.Lane + 1
+			
+			canRight := !rightLaneBlocked && tc.Lane+1 < segment.LaneCount
+			canLeft := !leftLaneBlocked && tc.Lane > 0
+			
+			if canRight && canLeft {
+				// Random choice
+				if rand.Float64() < 0.5 {
+					tc.TargetLane = tc.Lane + 1
+				} else {
+					tc.TargetLane = tc.Lane - 1
+				}
 				tc.LaneProgress = 0.01 // Start transition
+			} else if canRight {
+				tc.TargetLane = tc.Lane + 1
+				tc.LaneProgress = 0.01
+			} else if canLeft {
+				tc.TargetLane = tc.Lane - 1
+				tc.LaneProgress = 0.01
 			}
 		}
 	}
@@ -1417,6 +1446,7 @@ func (gs *GameplayScreen) updateTraffic(scrollSpeed float64, currentSegment Road
 				tc.Lane = tc.TargetLane
 				tc.TargetLane = 0
 				tc.LaneProgress = 0
+				tc.LastLaneChangeTime = time.Now().UnixMilli()
 				
 				// Update TargetSpeed for new lane
 				lanePosition := tc.Lane
