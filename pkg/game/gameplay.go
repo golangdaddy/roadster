@@ -161,7 +161,7 @@ func (tc *TrafficCar) Update(gs *GameplayScreen) {
 			segment := gs.getSegmentAt(tc.Y)
 			
 			canRight := !rightLaneBlocked && tc.Lane+1 < segment.LaneCount
-			canLeft := !leftLaneBlocked && tc.Lane > 0
+			canLeft := !leftLaneBlocked && tc.Lane > 1 // Traffic should not enter Lane 0
 			
 			if canRight && canLeft {
 				// Random choice
@@ -242,9 +242,9 @@ func NewGameplayScreen(selectedCar *car.Car, levelData *LevelData, onGameEnd fun
 		VelocityX:        0,
 		VelocityY:        0,
 		SteeringAngle:    0,
-		Acceleration:     0.5,
-		TurnSpeed:        3.0,  // Horizontal speed when turning
-		SteeringResponse: 0.15, // How fast steering returns to center
+		Acceleration:     0.2,  // Reduced for more realistic weight
+		TurnSpeed:        4.0,  // Responsive turning
+		SteeringResponse: 0.05, // Smoother steering return
 		SelectedCar:      selectedCar,
 	}
 
@@ -393,14 +393,14 @@ func (gs *GameplayScreen) Update() error {
 			gs.playerCar.VelocityY = maxSpeed
 		}
 	} else if ebiten.IsKeyPressed(ebiten.KeyArrowDown) {
-		gs.playerCar.VelocityY -= gs.playerCar.Acceleration * 1.5
+		gs.playerCar.VelocityY -= gs.playerCar.Acceleration * 3.0 // Stronger braking
 		if gs.playerCar.VelocityY < minSpeed {
 			gs.playerCar.VelocityY = minSpeed
 		}
 	} else {
 		// Gradually slow down when no input (friction)
 		if gs.playerCar.VelocityY > 0 {
-			gs.playerCar.VelocityY -= gs.playerCar.Acceleration * 0.2
+			gs.playerCar.VelocityY -= gs.playerCar.Acceleration * 0.1 // Lower friction for momentum
 			if gs.playerCar.VelocityY < 0 {
 				gs.playerCar.VelocityY = 0
 			}
