@@ -214,6 +214,7 @@ type GameplayScreen struct {
 	backgroundPattern *ebiten.Image // Repeating background pattern
 	lastSpawnTime int64 // Timestamp of last spawn attempt
 	spawnCooldown int64 // Minimum time between spawn attempts (in milliseconds)
+	DistanceTravelled float64 // Total miles travelled
 }
 
 // NewGameplayScreen creates a new gameplay screen
@@ -228,6 +229,7 @@ func NewGameplayScreen(selectedCar *car.Car, levelData *LevelData, onGameEnd fun
 		onGameEnd:    onGameEnd,
 		lastSpawnTime: time.Now().UnixMilli(),
 		spawnCooldown: 150 + rand.Int63n(100), // 150-250ms random cooldown between spawn attempts
+		DistanceTravelled: 0,
 	}
 
 	// Initialize player car
@@ -460,6 +462,21 @@ func (gs *GameplayScreen) Update() error {
 	// Camera follows car smoothly
 	targetCameraX := gs.playerCar.X - float64(gs.screenWidth)/2
 	gs.cameraX += (targetCameraX - gs.cameraX) * 0.1
+
+	// Update distance travelled and fuel
+	// MPH = Miles per Hour. At 60 FPS: Miles per Frame = MPH / 216000
+	currentSpeedMPH := gs.playerCar.VelocityY * MPHPerPixelPerFrame
+	gs.DistanceTravelled += currentSpeedMPH / 216000.0
+	
+	// Consume fuel based on speed
+	// Base burn + speed factor
+	fuelBurn := 0.001 + gs.playerCar.VelocityY * 0.002
+	if gs.playerCar.SelectedCar.FuelLevel > 0 {
+		gs.playerCar.SelectedCar.FuelLevel -= fuelBurn
+		if gs.playerCar.SelectedCar.FuelLevel < 0 {
+			gs.playerCar.SelectedCar.FuelLevel = 0
+		}
+	}
 
 	// Scroll the road (move road downward to create forward movement illusion)
 	scrollSpeed := gs.playerCar.VelocityY
@@ -1812,17 +1829,31 @@ func (gs *GameplayScreen) drawUI(screen *ebiten.Image) {
 	// Draw speedometer
 	gs.drawSpeedometer(screen)
 
-	// Draw mini-map or progress indicator
-	progressText := "PROGRESS: 0%"
-
-	// Draw fuel indicator
+	// Draw miles and fuel using bitmap font
+	face := text.NewGoXFace(bitmapfont.Face)
+	
+	milesText := fmt.Sprintf("MILES: %.1f", gs.DistanceTravelled)
 	fuelPercent := gs.playerCar.SelectedCar.FuelLevel / gs.playerCar.SelectedCar.FuelCapacity * 100
 	fuelText := fmt.Sprintf("FUEL: %.0f%%", fuelPercent)
-
-	// For now, just draw simple text overlays
-	// We'll implement proper text rendering later
-	_ = progressText
-	_ = fuelText
+	
+	// Position at top right
+	x := float64(gs.screenWidth) - 150
+	y := 30.0
+	
+	// Draw Miles
+	textOp := &text.DrawOptions{}
+	textOp.GeoM.Translate(x, y)
+	textOp.ColorScale.ScaleWithColor(color.White)
+	text.Draw(screen, milesText, face, textOp)
+	
+	// Draw Fuel
+	textOp.GeoM.Translate(0, 25) // Move down
+	if fuelPercent < 20 {
+		textOp.ColorScale.ScaleWithColor(color.RGBA{255, 50, 50, 255}) // Red low fuel warning
+	} else {
+		textOp.ColorScale.ScaleWithColor(color.White)
+	}
+	text.Draw(screen, fuelText, face, textOp)
 }
 
 // drawSpeedometer draws a speedometer displaying current speed in MPH
