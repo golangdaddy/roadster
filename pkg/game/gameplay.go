@@ -389,7 +389,7 @@ func (gs *GameplayScreen) Update() error {
 	maxSpeed := speedLimitMPH / MPHPerPixelPerFrame // Convert MPH to pixels/frame
 	
 	minSpeed := 0.0 // Allow stopping
-	if ebiten.IsKeyPressed(ebiten.KeyArrowUp) {
+	if ebiten.IsKeyPressed(ebiten.KeyArrowUp) && gs.playerCar.SelectedCar.FuelLevel > 0 {
 		gs.playerCar.VelocityY += gs.playerCar.Acceleration
 		if gs.playerCar.VelocityY > maxSpeed {
 			gs.playerCar.VelocityY = maxSpeed
@@ -469,8 +469,8 @@ func (gs *GameplayScreen) Update() error {
 	gs.DistanceTravelled += currentSpeedMPH / 216000.0
 	
 	// Consume fuel based on speed
-	// Base burn + speed factor
-	fuelBurn := 0.001 + gs.playerCar.VelocityY * 0.002
+	// Base burn + speed factor (Tuned for ~5 mins driving)
+	fuelBurn := 0.0002 + gs.playerCar.VelocityY * 0.0003
 	if gs.playerCar.SelectedCar.FuelLevel > 0 {
 		gs.playerCar.SelectedCar.FuelLevel -= fuelBurn
 		if gs.playerCar.SelectedCar.FuelLevel < 0 {
