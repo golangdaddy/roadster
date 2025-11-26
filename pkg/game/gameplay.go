@@ -341,6 +341,7 @@ func (gs *GameplayScreen) generateRoadFromLevel(levelData *LevelData) {
 func (gs *GameplayScreen) Update() error {
 	if inpututil.IsKeyJustPressed(ebiten.KeyEscape) {
 		gs.paused = !gs.paused
+		return nil
 	}
 
 	if gs.paused {
@@ -2053,12 +2054,6 @@ func (gs *GameplayScreen) drawSpeedGauge(screen *ebiten.Image, x, y, width, heig
 
 // updatePauseMenu handles input for the pause menu
 func (gs *GameplayScreen) updatePauseMenu() error {
-	// Resume on ESC again
-	if inpututil.IsKeyJustPressed(ebiten.KeyEscape) {
-		gs.paused = false
-		return nil
-	}
-
 	// Mouse interaction
 	mx, my := ebiten.CursorPosition()
 	centerX := gs.screenWidth / 2
