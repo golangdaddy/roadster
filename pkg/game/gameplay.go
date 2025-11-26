@@ -12,6 +12,7 @@ import (
 	"github.com/golangdaddy/roadster/pkg/models/car"
 	"github.com/hajimehoshi/ebiten/v2"
 	"github.com/hajimehoshi/ebiten/v2/ebitenutil"
+	"github.com/hajimehoshi/ebiten/v2/inpututil"
 	"github.com/hajimehoshi/ebiten/v2/text/v2"
 	"github.com/hajimehoshi/bitmapfont/v4"
 )
@@ -215,6 +216,7 @@ type GameplayScreen struct {
 	lastSpawnTime int64 // Timestamp of last spawn attempt
 	spawnCooldown int64 // Minimum time between spawn attempts (in milliseconds)
 	DistanceTravelled float64 // Total miles travelled
+	paused bool
 }
 
 // NewGameplayScreen creates a new gameplay screen
@@ -337,6 +339,14 @@ func (gs *GameplayScreen) generateRoadFromLevel(levelData *LevelData) {
 
 // Update handles gameplay logic
 func (gs *GameplayScreen) Update() error {
+	if inpututil.IsKeyJustPressed(ebiten.KeyEscape) {
+		gs.paused = !gs.paused
+	}
+
+	if gs.paused {
+		return gs.updatePauseMenu()
+	}
+
 	currentSegment, segmentIdx := gs.getCurrentRoadSegment()
 	laneWidth := 80.0
 
@@ -535,6 +545,11 @@ func (gs *GameplayScreen) Draw(screen *ebiten.Image) {
 
 	// Draw UI overlay
 	gs.drawUI(screen)
+	
+	// Draw pause menu on top
+	if gs.paused {
+		gs.drawPauseMenu(screen)
+	}
 }
 
 // drawRoad renders all road segments
@@ -2034,4 +2049,97 @@ func (gs *GameplayScreen) drawSpeedGauge(screen *ebiten.Image, x, y, width, heig
 		limitOp.GeoM.Translate(limitXPos-1, y)
 		screen.DrawImage(limitLine, limitOp)
 	}
+}
+
+// updatePauseMenu handles input for the pause menu
+func (gs *GameplayScreen) updatePauseMenu() error {
+	// Resume on ESC again
+	if inpututil.IsKeyJustPressed(ebiten.KeyEscape) {
+		gs.paused = false
+		return nil
+	}
+
+	// Mouse interaction
+	mx, my := ebiten.CursorPosition()
+	centerX := gs.screenWidth / 2
+	centerY := gs.screenHeight / 2
+	
+	// Button dimensions
+	btnW, btnH := 200, 50
+	
+	// Resume Button
+	if mx >= centerX-btnW/2 && mx <= centerX+btnW/2 &&
+	   my >= centerY-40-btnH/2 && my <= centerY-40+btnH/2 {
+		if inpututil.IsMouseButtonJustPressed(ebiten.MouseButtonLeft) {
+			gs.paused = false
+		}
+	}
+	
+	// Exit Button
+	if mx >= centerX-btnW/2 && mx <= centerX+btnW/2 &&
+	   my >= centerY+40-btnH/2 && my <= centerY+40+btnH/2 {
+		if inpututil.IsMouseButtonJustPressed(ebiten.MouseButtonLeft) {
+			// Exit to title
+			if gs.onGameEnd != nil {
+				gs.onGameEnd()
+			}
+		}
+	}
+	
+	return nil
+}
+
+// drawPauseMenu renders the pause menu overlay
+func (gs *GameplayScreen) drawPauseMenu(screen *ebiten.Image) {
+	// Dark overlay
+	overlay := ebiten.NewImage(gs.screenWidth, gs.screenHeight)
+	overlay.Fill(color.RGBA{0, 0, 0, 128})
+	screen.DrawImage(overlay, nil)
+	
+	centerX := float64(gs.screenWidth) / 2
+	centerY := float64(gs.screenHeight) / 2
+	
+	face := text.NewGoXFace(bitmapfont.Face)
+	
+	// PAUSED text
+	pausedText := "PAUSED"
+	textW := text.Advance(pausedText, face) * 4
+	op := &text.DrawOptions{}
+	op.GeoM.Scale(4, 4)
+	op.GeoM.Translate(centerX - textW/2, centerY - 150)
+	op.ColorScale.ScaleWithColor(color.White)
+	text.Draw(screen, pausedText, face, op)
+	
+	// Helper to draw button
+	drawButton := func(label string, y float64) {
+		btnW, btnH := 200.0, 50.0
+		btnX := centerX - btnW/2
+		btnY := y - btnH/2
+		
+		// Button background
+		btnImg := ebiten.NewImage(int(btnW), int(btnH))
+		btnImg.Fill(color.RGBA{50, 50, 50, 255})
+		
+		// Check hover
+		mx, my := ebiten.CursorPosition()
+		if float64(mx) >= btnX && float64(mx) <= btnX+btnW &&
+		   float64(my) >= btnY && float64(my) <= btnY+btnH {
+			btnImg.Fill(color.RGBA{100, 100, 100, 255}) // Highlight
+		}
+		
+		btnOp := &ebiten.DrawImageOptions{}
+		btnOp.GeoM.Translate(btnX, btnY)
+		screen.DrawImage(btnImg, btnOp)
+		
+		// Button Text
+		textW := text.Advance(label, face) * 2
+		textOp := &text.DrawOptions{}
+		textOp.GeoM.Scale(2, 2)
+		textOp.GeoM.Translate(centerX - textW/2, y - 8) // Centered
+		textOp.ColorScale.ScaleWithColor(color.White)
+		text.Draw(screen, label, face, textOp)
+	}
+	
+	drawButton("RESUME", centerY - 40)
+	drawButton("EXIT", centerY + 40)
 }
