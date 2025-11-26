@@ -218,6 +218,9 @@ type GameplayScreen struct {
 	spawnCooldown int64 // Minimum time between spawn attempts (in milliseconds)
 	DistanceTravelled float64 // Total miles travelled
 	TotalCarsPassed   int     // Total number of cars passed
+	Level             int     // Current player level
+	LevelThreshold    int     // Total cars needed to reach next level
+	PrevLevelThreshold int    // Total cars needed to reach current level (for progress bar)
 	paused            bool
 }
 
@@ -235,6 +238,9 @@ func NewGameplayScreen(selectedCar *car.Car, levelData *LevelData, onGameEnd fun
 		spawnCooldown: 150 + rand.Int63n(100), // 150-250ms random cooldown between spawn attempts
 		DistanceTravelled: 0,
 		TotalCarsPassed:   0,
+		Level:             1,
+		LevelThreshold:    5, // Start with 5 cars to level up
+		PrevLevelThreshold: 0,
 	}
 
 	// Initialize player car
@@ -1477,6 +1483,13 @@ func (gs *GameplayScreen) updateTraffic(scrollSpeed float64, currentSegment Road
 		if !tc.Passed && gs.playerCar.Y < tc.Y {
 			tc.Passed = true
 			gs.TotalCarsPassed++
+			
+			// Level Up Logic
+			if gs.TotalCarsPassed >= gs.LevelThreshold {
+				gs.Level++
+				gs.PrevLevelThreshold = gs.LevelThreshold
+				gs.LevelThreshold = int(float64(gs.LevelThreshold) * 1.5)
+			}
 		}
 		
 		// Handle lane changing
@@ -1880,6 +1893,23 @@ func (gs *GameplayScreen) drawUI(screen *ebiten.Image) {
 		textOp.ColorScale.ScaleWithColor(color.White)
 	}
 	text.Draw(screen, fuelText, face, textOp)
+	
+	// Draw Level
+	// Calculate Progress
+	rangeSize := gs.LevelThreshold - gs.PrevLevelThreshold
+	currentProgress := gs.TotalCarsPassed - gs.PrevLevelThreshold
+	progressPercent := 0.0
+	if rangeSize > 0 {
+		progressPercent = float64(currentProgress) / float64(rangeSize) * 100
+	}
+	if progressPercent > 100 { progressPercent = 100 }
+
+	levelText := fmt.Sprintf("LVL %d (%.0f%%)", gs.Level, progressPercent)
+	
+	levelOp := &text.DrawOptions{}
+	levelOp.GeoM.Translate(x, y + 50)
+	levelOp.ColorScale.ScaleWithColor(color.RGBA{255, 215, 0, 255}) // Gold
+	text.Draw(screen, levelText, face, levelOp)
 }
 
 // drawSpeedometer draws a speedometer displaying current speed in MPH
@@ -2072,17 +2102,17 @@ func (gs *GameplayScreen) updatePauseMenu() error {
 	// Button dimensions
 	btnW, btnH := 200, 50
 	
-	// Resume Button (Center Y + 20)
+	// Resume Button (Center Y + 50)
 	if mx >= centerX-btnW/2 && mx <= centerX+btnW/2 &&
-	   my >= centerY+20-btnH/2 && my <= centerY+20+btnH/2 {
+	   my >= centerY+50-btnH/2 && my <= centerY+50+btnH/2 {
 		if inpututil.IsMouseButtonJustPressed(ebiten.MouseButtonLeft) {
 			gs.paused = false
 		}
 	}
 	
-	// Exit Button (Center Y + 80)
+	// Exit Button (Center Y + 110)
 	if mx >= centerX-btnW/2 && mx <= centerX+btnW/2 &&
-	   my >= centerY+80-btnH/2 && my <= centerY+80+btnH/2 {
+	   my >= centerY+110-btnH/2 && my <= centerY+110+btnH/2 {
 		if inpututil.IsMouseButtonJustPressed(ebiten.MouseButtonLeft) {
 			// Exit to title
 			if gs.onGameEnd != nil {
@@ -2186,6 +2216,15 @@ func (gs *GameplayScreen) drawPauseMenu(screen *ebiten.Image) {
 	cOp.ColorScale.ScaleWithColor(color.RGBA{100, 255, 100, 255})
 	text.Draw(screen, carsText, face, cOp)
 	
+	// Level
+	levelText := fmt.Sprintf("LEVEL: %d", gs.Level)
+	lW := text.Advance(levelText, face) * statsScale
+	lOp := &text.DrawOptions{}
+	lOp.GeoM.Scale(statsScale, statsScale)
+	lOp.GeoM.Translate(centerX - lW/2, statsY + 60)
+	lOp.ColorScale.ScaleWithColor(color.RGBA{255, 215, 0, 255})
+	text.Draw(screen, levelText, face, lOp)
+	
 	// Buttons
 	// Helper to draw button
 	drawButton := func(label string, y float64) {
@@ -2217,6 +2256,6 @@ func (gs *GameplayScreen) drawPauseMenu(screen *ebiten.Image) {
 		text.Draw(screen, label, face, textOp)
 	}
 	
-	drawButton("RESUME", centerY + 20)
-	drawButton("EXIT", centerY + 80)
+	drawButton("RESUME", centerY + 50)
+	drawButton("EXIT", centerY + 110)
 }
