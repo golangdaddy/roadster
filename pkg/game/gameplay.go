@@ -41,6 +41,7 @@ type TrafficCar struct {
 	LaneProgress float64    // 0.0 to 1.0 for visual transition
 	Color        color.RGBA // Car color for variety
 	LastLaneChangeTime int64 // Timestamp of last lane change
+	Passed       bool // Whether the player has passed this car
 }
 
 // Update runs the AI logic to maintain safe distance
@@ -216,7 +217,8 @@ type GameplayScreen struct {
 	lastSpawnTime int64 // Timestamp of last spawn attempt
 	spawnCooldown int64 // Minimum time between spawn attempts (in milliseconds)
 	DistanceTravelled float64 // Total miles travelled
-	paused bool
+	TotalCarsPassed   int     // Total number of cars passed
+	paused            bool
 }
 
 // NewGameplayScreen creates a new gameplay screen
@@ -232,6 +234,7 @@ func NewGameplayScreen(selectedCar *car.Car, levelData *LevelData, onGameEnd fun
 		lastSpawnTime: time.Now().UnixMilli(),
 		spawnCooldown: 150 + rand.Int63n(100), // 150-250ms random cooldown between spawn attempts
 		DistanceTravelled: 0,
+		TotalCarsPassed:   0,
 	}
 
 	// Initialize player car
@@ -1469,6 +1472,13 @@ func (gs *GameplayScreen) updateTraffic(scrollSpeed float64, currentSegment Road
 		// Since Y decreases upward, we subtract the absolute speed to move up
 		tc.Y -= tc.VelocityY
 		
+		// Check if player has passed this car (overtaken)
+		// Player Y < Traffic Y means Player is AHEAD (further up the road)
+		if !tc.Passed && gs.playerCar.Y < tc.Y {
+			tc.Passed = true
+			gs.TotalCarsPassed++
+		}
+		
 		// Handle lane changing
 		if tc.LaneProgress > 0 {
 			// Increment progress
@@ -2062,17 +2072,17 @@ func (gs *GameplayScreen) updatePauseMenu() error {
 	// Button dimensions
 	btnW, btnH := 200, 50
 	
-	// Resume Button
+	// Resume Button (Center Y + 20)
 	if mx >= centerX-btnW/2 && mx <= centerX+btnW/2 &&
-	   my >= centerY-40-btnH/2 && my <= centerY-40+btnH/2 {
+	   my >= centerY+20-btnH/2 && my <= centerY+20+btnH/2 {
 		if inpututil.IsMouseButtonJustPressed(ebiten.MouseButtonLeft) {
 			gs.paused = false
 		}
 	}
 	
-	// Exit Button
+	// Exit Button (Center Y + 80)
 	if mx >= centerX-btnW/2 && mx <= centerX+btnW/2 &&
-	   my >= centerY+40-btnH/2 && my <= centerY+40+btnH/2 {
+	   my >= centerY+80-btnH/2 && my <= centerY+80+btnH/2 {
 		if inpututil.IsMouseButtonJustPressed(ebiten.MouseButtonLeft) {
 			// Exit to title
 			if gs.onGameEnd != nil {
@@ -2088,7 +2098,7 @@ func (gs *GameplayScreen) updatePauseMenu() error {
 func (gs *GameplayScreen) drawPauseMenu(screen *ebiten.Image) {
 	// Dark overlay
 	overlay := ebiten.NewImage(gs.screenWidth, gs.screenHeight)
-	overlay.Fill(color.RGBA{0, 0, 0, 128})
+	overlay.Fill(color.RGBA{0, 0, 0, 200})
 	screen.DrawImage(overlay, nil)
 	
 	centerX := float64(gs.screenWidth) / 2
@@ -2096,15 +2106,87 @@ func (gs *GameplayScreen) drawPauseMenu(screen *ebiten.Image) {
 	
 	face := text.NewGoXFace(bitmapfont.Face)
 	
+	// 1. Retro Player Avatar (Top)
+	avatarScale := 6.0
+	avatarSize := 8.0 * avatarScale
+	avatarX := centerX - avatarSize/2
+	avatarY := centerY - 180 // Move up slightly
+	
+	// Draw Avatar Background
+	avatarImg := ebiten.NewImage(8, 8)
+	// Skin
+	avatarImg.Fill(color.RGBA{255, 200, 150, 255})
+	// Hair (Top 2 rows + sideburns)
+	for x := 0; x < 8; x++ {
+		avatarImg.Set(x, 0, color.RGBA{60, 40, 20, 255})
+		avatarImg.Set(x, 1, color.RGBA{60, 40, 20, 255})
+	}
+	avatarImg.Set(0, 2, color.RGBA{60, 40, 20, 255})
+	avatarImg.Set(7, 2, color.RGBA{60, 40, 20, 255})
+	
+	// Sunglasses (Cool driver look)
+	for x := 1; x < 7; x++ {
+		if x != 3 && x != 4 { // Lenses
+			avatarImg.Set(x, 3, color.RGBA{0, 0, 0, 255})
+		} else { // Bridge
+			avatarImg.Set(x, 3, color.RGBA{50, 50, 50, 255})
+		}
+	}
+	
+	// Smile
+	avatarImg.Set(2, 6, color.RGBA{150, 50, 50, 255})
+	avatarImg.Set(3, 6, color.RGBA{150, 50, 50, 255})
+	avatarImg.Set(4, 6, color.RGBA{150, 50, 50, 255})
+	avatarImg.Set(5, 6, color.RGBA{150, 50, 50, 255})
+	avatarImg.Set(1, 5, color.RGBA{150, 50, 50, 255})
+	avatarImg.Set(6, 5, color.RGBA{150, 50, 50, 255})
+	
+	// Draw Border
+	borderImg := ebiten.NewImage(int(avatarSize)+8, int(avatarSize)+8)
+	borderImg.Fill(color.White)
+	borderOp := &ebiten.DrawImageOptions{}
+	borderOp.GeoM.Translate(avatarX-4, avatarY-4)
+	screen.DrawImage(borderImg, borderOp)
+	
+	// Draw Avatar
+	avatarOp := &ebiten.DrawImageOptions{}
+	avatarOp.GeoM.Scale(avatarScale, avatarScale)
+	avatarOp.GeoM.Translate(avatarX, avatarY)
+	screen.DrawImage(avatarImg, avatarOp)
+
 	// PAUSED text
 	pausedText := "PAUSED"
-	textW := text.Advance(pausedText, face) * 4
+	textW := text.Advance(pausedText, face) * 3
 	op := &text.DrawOptions{}
-	op.GeoM.Scale(4, 4)
-	op.GeoM.Translate(centerX - textW/2, centerY - 150)
+	op.GeoM.Scale(3, 3)
+	op.GeoM.Translate(centerX - textW/2, avatarY + avatarSize + 20)
 	op.ColorScale.ScaleWithColor(color.White)
 	text.Draw(screen, pausedText, face, op)
 	
+	// Stats
+	statsY := avatarY + avatarSize + 70
+	milesText := fmt.Sprintf("TOTAL MILES: %.1f", gs.DistanceTravelled)
+	carsText := fmt.Sprintf("CARS PASSED: %d", gs.TotalCarsPassed)
+	
+	statsScale := 1.5
+	
+	// Miles
+	mW := text.Advance(milesText, face) * statsScale
+	mOp := &text.DrawOptions{}
+	mOp.GeoM.Scale(statsScale, statsScale)
+	mOp.GeoM.Translate(centerX - mW/2, statsY)
+	mOp.ColorScale.ScaleWithColor(color.RGBA{100, 255, 255, 255})
+	text.Draw(screen, milesText, face, mOp)
+	
+	// Cars
+	cW := text.Advance(carsText, face) * statsScale
+	cOp := &text.DrawOptions{}
+	cOp.GeoM.Scale(statsScale, statsScale)
+	cOp.GeoM.Translate(centerX - cW/2, statsY + 30)
+	cOp.ColorScale.ScaleWithColor(color.RGBA{100, 255, 100, 255})
+	text.Draw(screen, carsText, face, cOp)
+	
+	// Buttons
 	// Helper to draw button
 	drawButton := func(label string, y float64) {
 		btnW, btnH := 200.0, 50.0
@@ -2135,6 +2217,6 @@ func (gs *GameplayScreen) drawPauseMenu(screen *ebiten.Image) {
 		text.Draw(screen, label, face, textOp)
 	}
 	
-	drawButton("RESUME", centerY - 40)
-	drawButton("EXIT", centerY + 40)
+	drawButton("RESUME", centerY + 20)
+	drawButton("EXIT", centerY + 80)
 }
