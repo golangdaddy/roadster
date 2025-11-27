@@ -1896,16 +1896,7 @@ func (gs *GameplayScreen) drawUI(screen *ebiten.Image) {
 	text.Draw(screen, fuelText, face, textOp)
 	
 	// Draw Level
-	// Calculate Progress
-	rangeSize := gs.LevelThreshold - gs.PrevLevelThreshold
-	currentProgress := gs.TotalCarsPassed - gs.PrevLevelThreshold
-	progressPercent := 0.0
-	if rangeSize > 0 {
-		progressPercent = float64(currentProgress) / float64(rangeSize) * 100
-	}
-	if progressPercent > 100 { progressPercent = 100 }
-
-	levelText := fmt.Sprintf("LVL %d (%.0f%%)", gs.Level, progressPercent)
+	levelText := fmt.Sprintf("LVL %d (%d/%d)", gs.Level, gs.TotalCarsPassed, gs.LevelThreshold)
 	
 	levelOp := &text.DrawOptions{}
 	levelOp.GeoM.Translate(x, y + 50)
