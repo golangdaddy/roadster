@@ -255,7 +255,7 @@ func NewGameplayScreen(selectedCar *car.Car, levelData *LevelData, onGameEnd fun
 		VelocityX:        0,
 		VelocityY:        0,
 		SteeringAngle:    0,
-		Acceleration:     0.2,  // Reduced for more realistic weight
+		Acceleration:     0.05, // Reduced for more gradual speed transitions
 		TurnSpeed:        4.0,  // Responsive turning
 		SteeringResponse: 0.05, // Smoother steering return
 		SelectedCar:      selectedCar,
@@ -377,7 +377,7 @@ func (gs *GameplayScreen) Update() error {
 	// Handle steering input (Left/Right arrow keys)
 	maxSteeringAngle := 1.0
 	steeringInput := 0.08 // How fast steering angle changes per frame
-
+	
 	if ebiten.IsKeyPressed(ebiten.KeyArrowLeft) {
 		gs.playerCar.SteeringAngle -= steeringInput
 		if gs.playerCar.SteeringAngle < -maxSteeringAngle {
@@ -410,9 +410,12 @@ func (gs *GameplayScreen) Update() error {
 	
 	minSpeed := 0.0 // Allow stopping
 	if ebiten.IsKeyPressed(ebiten.KeyArrowUp) && gs.playerCar.SelectedCar.FuelLevel > 0 {
-		gs.playerCar.VelocityY += gs.playerCar.Acceleration
-		if gs.playerCar.VelocityY > maxSpeed {
-			gs.playerCar.VelocityY = maxSpeed
+		// Only accelerate if below max speed
+		if gs.playerCar.VelocityY < maxSpeed {
+			gs.playerCar.VelocityY += gs.playerCar.Acceleration
+			if gs.playerCar.VelocityY > maxSpeed {
+				gs.playerCar.VelocityY = maxSpeed
+			}
 		}
 	} else if ebiten.IsKeyPressed(ebiten.KeyArrowDown) {
 		gs.playerCar.VelocityY -= gs.playerCar.Acceleration * 3.0 // Stronger braking
@@ -429,9 +432,12 @@ func (gs *GameplayScreen) Update() error {
 		}
 	}
 	
-	// Enforce speed limit (in case car was already above limit when changing lanes)
+	// Enforce speed limit (gradual deceleration)
 	if gs.playerCar.VelocityY > maxSpeed {
-		gs.playerCar.VelocityY = maxSpeed
+		gs.playerCar.VelocityY -= 0.02 // Gradual drag
+		if gs.playerCar.VelocityY < maxSpeed {
+			gs.playerCar.VelocityY = maxSpeed
+		}
 	}
 
 	// Apply steering to horizontal velocity
@@ -1495,7 +1501,7 @@ func (gs *GameplayScreen) updateTraffic(scrollSpeed float64, currentSegment Road
 		// Handle lane changing
 		if tc.LaneProgress > 0 {
 			// Increment progress
-			tc.LaneProgress += 0.05 // Speed of lane change
+			tc.LaneProgress += 0.01 // Speed of lane change (slower/more gentle)
 			if tc.LaneProgress > 1.0 {
 				tc.LaneProgress = 1.0
 			}
