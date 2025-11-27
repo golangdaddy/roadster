@@ -3,7 +3,7 @@ gameplay:
     enabled: true
     base_xp_per_car: 10
     level_multiplier: 1.5 # How much harder the next level is
-    initial_threshold: 10 # Cars needed to pass Level 1
+    initial_threshold: 172 # Cars needed to pass Level 1
     max_level: 50
 
 ui:

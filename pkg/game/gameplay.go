@@ -239,7 +239,7 @@ func NewGameplayScreen(selectedCar *car.Car, levelData *LevelData, onGameEnd fun
 		DistanceTravelled: 0,
 		TotalCarsPassed:   0,
 		Level:             1,
-		LevelThreshold:    5, // Start with 5 cars to level up
+		LevelThreshold:    172, // Start with 172 cars to level up (matches config)
 		PrevLevelThreshold: 0,
 	}
 
@@ -1711,6 +1711,7 @@ func (gs *GameplayScreen) spawnTrafficInDirection(segment RoadSegment, laneWidth
 		TargetSpeed: trafficVelocityY,
 		Lane:        lane,
 		Color:       carColor,
+		Passed:      !ahead, // If spawned behind, it's already passed
 	}
 	
 	gs.trafficMutex.Lock()
