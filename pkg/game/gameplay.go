@@ -44,11 +44,27 @@ type TrafficCar struct {
 	Passed       bool // Whether the player has passed this car
 }
 
+// PlayerPed represents the human character when on foot
+type PlayerPed struct {
+	X, Y      float64
+	Speed     float64
+	Sprite    *ebiten.Image
+}
+
 // Update runs the AI logic to maintain safe distance
 func (tc *TrafficCar) Update(gs *GameplayScreen) {
 	// Safety check: skip AI updates if coordinates are extreme to prevent panics
 	if math.Abs(tc.Y) > 100000 || math.Abs(gs.playerCar.Y) > 100000 {
 		return
+	}
+
+	// Check for pedestrian
+	if gs.onFoot && gs.playerPed != nil {
+		dist := math.Hypot(tc.X-gs.playerPed.X, tc.Y-gs.playerPed.Y)
+		if dist < 200 {
+			tc.TargetSpeed = 0
+			return
+		}
 	}
 
 	// Find closest car ahead in same lane
@@ -209,6 +225,7 @@ type GameplayScreen struct {
 	screenWidth  int
 	screenHeight int
 	cameraX      float64 // Camera X offset to follow car
+	cameraY      float64 // Camera Y offset to follow target
 	onGameEnd    func() // Callback when game ends
 	levelData    *LevelData // Store level data for reset
 	initialX     float64   // Initial player X position
@@ -222,6 +239,8 @@ type GameplayScreen struct {
 	LevelThreshold    int     // Total cars needed to reach next level
 	PrevLevelThreshold int    // Total cars needed to reach current level (for progress bar)
 	paused            bool
+	onFoot            bool
+	playerPed         *PlayerPed
 }
 
 // NewGameplayScreen creates a new gameplay screen
@@ -247,6 +266,9 @@ func NewGameplayScreen(selectedCar *car.Car, levelData *LevelData, onGameEnd fun
 	laneWidth := 80.0
 	initialX := laneWidth / 2 // Start in center of starting lane (world X = 40)
 	initialY := float64(gs.screenHeight) - 100
+	
+	gs.cameraX = initialX - float64(gs.screenWidth)/2
+	gs.cameraY = initialY - float64(gs.screenHeight)/2
 	
 	gs.playerCar = &Car{
 		X:                initialX,
@@ -374,81 +396,92 @@ func (gs *GameplayScreen) Update() error {
 		}
 	}
 
-	// Handle steering input (Left/Right arrow keys)
-	maxSteeringAngle := 1.0
-	steeringInput := 0.08 // How fast steering angle changes per frame
-	
-	if ebiten.IsKeyPressed(ebiten.KeyArrowLeft) {
-		gs.playerCar.SteeringAngle -= steeringInput
-		if gs.playerCar.SteeringAngle < -maxSteeringAngle {
-			gs.playerCar.SteeringAngle = -maxSteeringAngle
+	// Handle inputs
+	if gs.onFoot {
+		gs.updatePed()
+		// Stop the car
+		gs.playerCar.VelocityY *= 0.9
+		if gs.playerCar.VelocityY < 0.01 {
+			gs.playerCar.VelocityY = 0
 		}
-	} else if ebiten.IsKeyPressed(ebiten.KeyArrowRight) {
-		gs.playerCar.SteeringAngle += steeringInput
-		if gs.playerCar.SteeringAngle > maxSteeringAngle {
-			gs.playerCar.SteeringAngle = maxSteeringAngle
-		}
+		gs.playerCar.VelocityX *= 0.9
 	} else {
-		// Return steering to center when no input
-		if gs.playerCar.SteeringAngle > 0 {
-			gs.playerCar.SteeringAngle -= gs.playerCar.SteeringResponse
-			if gs.playerCar.SteeringAngle < 0 {
-				gs.playerCar.SteeringAngle = 0
-			}
-		} else if gs.playerCar.SteeringAngle < 0 {
-			gs.playerCar.SteeringAngle += gs.playerCar.SteeringResponse
-			if gs.playerCar.SteeringAngle > 0 {
-				gs.playerCar.SteeringAngle = 0
+		// Check for car exit
+		if inpututil.IsKeyJustPressed(ebiten.KeyEnter) {
+			if math.Abs(gs.playerCar.VelocityY) < 0.5 {
+				gs.exitCar()
 			}
 		}
-	}
 
-	// Calculate current lane and speed limit
-	currentLane := gs.getCurrentLane(currentSegment, laneWidth)
-	speedLimitMPH := 50.0 + float64(currentLane)*10.0 // Lane 0 = 50, Lane 1 = 60, Lane 2 = 70, etc.
-	maxSpeed := speedLimitMPH / MPHPerPixelPerFrame // Convert MPH to pixels/frame
-	
-	minSpeed := 0.0 // Allow stopping
-	if ebiten.IsKeyPressed(ebiten.KeyArrowUp) && gs.playerCar.SelectedCar.FuelLevel > 0 {
-		// Only accelerate if below max speed
-		if gs.playerCar.VelocityY < maxSpeed {
-			gs.playerCar.VelocityY += gs.playerCar.Acceleration
-			if gs.playerCar.VelocityY > maxSpeed {
+		// Handle steering input (Left/Right arrow keys)
+		maxSteeringAngle := 1.0
+		steeringInput := 0.08
+
+		if ebiten.IsKeyPressed(ebiten.KeyArrowLeft) {
+			gs.playerCar.SteeringAngle -= steeringInput
+			if gs.playerCar.SteeringAngle < -maxSteeringAngle {
+				gs.playerCar.SteeringAngle = -maxSteeringAngle
+			}
+		} else if ebiten.IsKeyPressed(ebiten.KeyArrowRight) {
+			gs.playerCar.SteeringAngle += steeringInput
+			if gs.playerCar.SteeringAngle > maxSteeringAngle {
+				gs.playerCar.SteeringAngle = maxSteeringAngle
+			}
+		} else {
+			// Return steering to center when no input
+			if gs.playerCar.SteeringAngle > 0 {
+				gs.playerCar.SteeringAngle -= gs.playerCar.SteeringResponse
+				if gs.playerCar.SteeringAngle < 0 {
+					gs.playerCar.SteeringAngle = 0
+				}
+			} else if gs.playerCar.SteeringAngle < 0 {
+				gs.playerCar.SteeringAngle += gs.playerCar.SteeringResponse
+				if gs.playerCar.SteeringAngle > 0 {
+					gs.playerCar.SteeringAngle = 0
+				}
+			}
+		}
+
+		// Calculate current lane and speed limit
+		currentLane := gs.getCurrentLane(currentSegment, laneWidth)
+		speedLimitMPH := 50.0 + float64(currentLane)*10.0
+		maxSpeed := speedLimitMPH / MPHPerPixelPerFrame
+
+		minSpeed := 0.0
+		if ebiten.IsKeyPressed(ebiten.KeyArrowUp) && gs.playerCar.SelectedCar.FuelLevel > 0 {
+			if gs.playerCar.VelocityY < maxSpeed {
+				gs.playerCar.VelocityY += gs.playerCar.Acceleration
+				if gs.playerCar.VelocityY > maxSpeed {
+					gs.playerCar.VelocityY = maxSpeed
+				}
+			}
+		} else if ebiten.IsKeyPressed(ebiten.KeyArrowDown) {
+			gs.playerCar.VelocityY -= gs.playerCar.Acceleration * 3.0
+			if gs.playerCar.VelocityY < minSpeed {
+				gs.playerCar.VelocityY = minSpeed
+			}
+		} else {
+			if gs.playerCar.VelocityY > 0 {
+				gs.playerCar.VelocityY -= gs.playerCar.Acceleration * 0.1
+				if gs.playerCar.VelocityY < 0 {
+					gs.playerCar.VelocityY = 0
+				}
+			}
+		}
+
+		if gs.playerCar.VelocityY > maxSpeed {
+			gs.playerCar.VelocityY -= 0.02
+			if gs.playerCar.VelocityY < maxSpeed {
 				gs.playerCar.VelocityY = maxSpeed
 			}
 		}
-	} else if ebiten.IsKeyPressed(ebiten.KeyArrowDown) {
-		gs.playerCar.VelocityY -= gs.playerCar.Acceleration * 3.0 // Stronger braking
-		if gs.playerCar.VelocityY < minSpeed {
-			gs.playerCar.VelocityY = minSpeed
-		}
-	} else {
-		// Gradually slow down when no input (friction)
-		if gs.playerCar.VelocityY > 0 {
-			gs.playerCar.VelocityY -= gs.playerCar.Acceleration * 0.1 // Lower friction for momentum
-			if gs.playerCar.VelocityY < 0 {
-				gs.playerCar.VelocityY = 0
-			}
-		}
-	}
-	
-	// Enforce speed limit (gradual deceleration)
-	if gs.playerCar.VelocityY > maxSpeed {
-		gs.playerCar.VelocityY -= 0.02 // Gradual drag
-		if gs.playerCar.VelocityY < maxSpeed {
-			gs.playerCar.VelocityY = maxSpeed
-		}
-	}
 
-	// Apply steering to horizontal velocity
-	// Steering effectiveness increases with speed
-	// Use a reference max speed (100 MPH = 8 pixels/frame) for steering calculation
-	referenceMaxSpeed := 100.0 / MPHPerPixelPerFrame // 8.0 pixels/frame
-	speedFactor := gs.playerCar.VelocityY / referenceMaxSpeed
-	gs.playerCar.VelocityX = gs.playerCar.SteeringAngle * gs.playerCar.TurnSpeed * speedFactor
+		referenceMaxSpeed := 100.0 / MPHPerPixelPerFrame
+		speedFactor := gs.playerCar.VelocityY / referenceMaxSpeed
+		gs.playerCar.VelocityX = gs.playerCar.SteeringAngle * gs.playerCar.TurnSpeed * speedFactor
 
-	// Apply friction to horizontal movement (car naturally slows horizontal drift)
-	gs.playerCar.VelocityX *= 0.95
+		gs.playerCar.VelocityX *= 0.95
+	}
 
 	// Update car position based on velocity
 	gs.playerCar.X += gs.playerCar.VelocityX
@@ -486,8 +519,19 @@ func (gs *GameplayScreen) Update() error {
 	}
 
 	// Camera follows car smoothly
-	targetCameraX := gs.playerCar.X - float64(gs.screenWidth)/2
+	targetX := gs.playerCar.X
+	if gs.onFoot && gs.playerPed != nil {
+		targetX = gs.playerPed.X
+	}
+	targetCameraX := targetX - float64(gs.screenWidth)/2
 	gs.cameraX += (targetCameraX - gs.cameraX) * 0.1
+	
+	targetY := gs.playerCar.Y
+	if gs.onFoot && gs.playerPed != nil {
+		targetY = gs.playerPed.Y
+	}
+	targetCameraY := targetY - float64(gs.screenHeight)/2
+	gs.cameraY += (targetCameraY - gs.cameraY) * 0.1
 
 	// Update distance travelled and fuel
 	// MPH = Miles per Hour. At 60 FPS: Miles per Frame = MPH / 216000
@@ -559,6 +603,10 @@ func (gs *GameplayScreen) Draw(screen *ebiten.Image) {
 	// Draw player car
 	gs.drawCar(screen)
 
+	if gs.onFoot && gs.playerPed != nil {
+		gs.drawPed(screen)
+	}
+
 	// Draw UI overlay
 	gs.drawUI(screen)
 	
@@ -578,7 +626,7 @@ func (gs *GameplayScreen) drawRoad(screen *ebiten.Image) {
 // drawRoadSegment renders a single road segment
 func (gs *GameplayScreen) drawRoadSegment(screen *ebiten.Image, segment RoadSegment) {
 	// Calculate screen position (camera is above car)
-	screenY := segment.Y - gs.playerCar.Y + float64(gs.screenHeight)/2
+	screenY := segment.Y - gs.cameraY
 
 	// Safety check: skip if coordinates are extreme to prevent ebiten panics
 	if math.Abs(screenY) > 100000 {
@@ -1127,7 +1175,7 @@ func (gs *GameplayScreen) drawCar(screen *ebiten.Image) {
 
 	// Car position on screen (convert world X to screen X with camera offset)
 	screenX := gs.playerCar.X - gs.cameraX - float64(carWidth)/2
-	screenY := float64(gs.screenHeight)/2 - float64(carHeight)/2 // Centered vertically
+	screenY := gs.playerCar.Y - gs.cameraY - float64(carHeight)/2
 
 	// Create improved retro car sprite
 	carImg := ebiten.NewImage(carWidth, carHeight)
@@ -1735,7 +1783,7 @@ func (gs *GameplayScreen) drawTraffic(screen *ebiten.Image) {
 	for _, tc := range gs.traffic {
 		// Calculate screen position relative to player car
 		// Center the traffic car vertically to match player car center logic
-		screenY := tc.Y - gs.playerCar.Y + float64(gs.screenHeight)/2 - float64(carHeight)/2
+		screenY := tc.Y - gs.cameraY - float64(carHeight)/2
 		
 		// Only draw if on screen
 		if screenY < -100 || screenY > float64(gs.screenHeight)+100 {
@@ -2090,7 +2138,112 @@ func (gs *GameplayScreen) drawSpeedGauge(screen *ebiten.Image, x, y, width, heig
 	}
 }
 
-// updatePauseMenu handles input for the pause menu
+// createPedSprite generates a simple pedestrian sprite
+func (gs *GameplayScreen) createPedSprite() *ebiten.Image {
+	img := ebiten.NewImage(16, 16)
+	img.Fill(color.RGBA{255, 200, 150, 255}) // Skin
+	// Add some clothes (Blue shirt)
+	for y := 6; y < 16; y++ {
+		for x := 0; x < 16; x++ {
+			img.Set(x, y, color.RGBA{0, 0, 200, 255})
+		}
+	}
+	return img
+}
+
+func (gs *GameplayScreen) exitCar() {
+	gs.onFoot = true
+	gs.playerPed = &PlayerPed{
+		X:      gs.playerCar.X - 40, // Spawn to the left
+		Y:      gs.playerCar.Y,
+		Speed:  3.0,
+		Sprite: gs.createPedSprite(),
+	}
+	gs.playerCar.VelocityX = 0
+	gs.playerCar.VelocityY = 0
+}
+
+func (gs *GameplayScreen) updatePed() {
+	// Movement (8 directions)
+	dx, dy := 0.0, 0.0
+	if ebiten.IsKeyPressed(ebiten.KeyArrowLeft) {
+		dx = -1
+	}
+	if ebiten.IsKeyPressed(ebiten.KeyArrowRight) {
+		dx = 1
+	}
+	if ebiten.IsKeyPressed(ebiten.KeyArrowUp) {
+		dy = -1
+	}
+	if ebiten.IsKeyPressed(ebiten.KeyArrowDown) {
+		dy = 1
+	}
+
+	// Run (Shift)
+	speed := gs.playerPed.Speed
+	if ebiten.IsKeyPressed(ebiten.KeyShift) {
+		speed *= 2.0
+	}
+
+	// Normalize diagonal
+	if dx != 0 && dy != 0 {
+		factor := speed / math.Sqrt(2)
+		gs.playerPed.X += dx * factor
+		gs.playerPed.Y += dy * factor
+	} else {
+		gs.playerPed.X += dx * speed
+		gs.playerPed.Y += dy * speed
+	}
+
+	// Interaction with Traffic
+	gs.trafficMutex.Lock()
+	defer gs.trafficMutex.Unlock()
+
+	for i, tc := range gs.traffic {
+		dist := math.Hypot(tc.X-gs.playerPed.X, tc.Y-gs.playerPed.Y)
+
+		// Stop car if close
+		if dist < 150 {
+			tc.TargetSpeed = 0
+			tc.VelocityY *= 0.9 // Brake
+		}
+
+		// Steal Car
+		if dist < 50 && inpututil.IsKeyJustPressed(ebiten.KeyEnter) {
+			// Take over traffic car
+			gs.playerCar.X = tc.X
+			gs.playerCar.Y = tc.Y
+			gs.playerCar.VelocityX = 0
+			gs.playerCar.VelocityY = 0
+			// TODO: Change color/sprite of player car?
+
+			// Remove traffic car
+			gs.traffic = append(gs.traffic[:i], gs.traffic[i+1:]...)
+
+			// Enter car
+			gs.onFoot = false
+			gs.playerPed = nil
+			return
+		}
+	}
+
+	// Re-enter own car
+	distToOwn := math.Hypot(gs.playerCar.X-gs.playerPed.X, gs.playerCar.Y-gs.playerPed.Y)
+	if distToOwn < 50 && inpututil.IsKeyJustPressed(ebiten.KeyEnter) {
+		gs.onFoot = false
+		gs.playerPed = nil
+	}
+}
+
+func (gs *GameplayScreen) drawPed(screen *ebiten.Image) {
+	op := &ebiten.DrawImageOptions{}
+	// Position relative to camera/screen
+	screenX := gs.playerPed.X - gs.cameraX - 8
+	screenY := gs.playerPed.Y - gs.cameraY - 8
+
+	op.GeoM.Translate(screenX, screenY)
+	screen.DrawImage(gs.playerPed.Sprite, op)
+}
 func (gs *GameplayScreen) updatePauseMenu() error {
 	// Mouse interaction
 	mx, my := ebiten.CursorPosition()
