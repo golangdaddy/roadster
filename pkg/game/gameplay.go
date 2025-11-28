@@ -723,7 +723,19 @@ func (gs *GameplayScreen) Update() error {
 		leftEdge = leftEdge + (nextLeftEdge - leftEdge) * progress
 		rightEdge = rightEdge + (nextRightEdge - rightEdge) * progress
 	}
-	
+
+	// Check for nearby petrol stations to expand bounds (ALLOW ENTRY)
+	for _, station := range gs.petrolStations {
+		// Check vertical proximity (within 250px)
+		if math.Abs(gs.playerCar.Y-station.Y) < 250 {
+			// Expand left edge to include station area
+			stationBound := station.X - 60
+			if stationBound < leftEdge {
+				leftEdge = stationBound
+			}
+		}
+	}
+
 	if gs.playerCar.X < leftEdge+10 {
 		gs.playerCar.X = leftEdge + 10
 		gs.playerCar.VelocityX = 0
@@ -825,6 +837,7 @@ func (gs *GameplayScreen) Draw(screen *ebiten.Image) {
 
 
 	// Draw road segments
+	gs.drawPetrolStationTarmac(screen)
 	gs.drawRoad(screen)
 	gs.drawPetrolStations(screen)
 
@@ -2198,6 +2211,29 @@ func (gs *GameplayScreen) drawUI(screen *ebiten.Image) {
 	}
 }
 
+func (gs *GameplayScreen) drawPetrolStationTarmac(screen *ebiten.Image) {
+	for _, station := range gs.petrolStations {
+		// Draw large tarmac area
+		w, h := 200, 500
+		tarmacImg := ebiten.NewImage(w, h)
+		tarmacImg.Fill(color.RGBA{105, 105, 105, 255}) // DimGray
+
+		worldX := station.X - 80
+		worldY := station.Y - float64(h)/2
+
+		screenX := worldX - gs.cameraX
+		screenY := worldY - gs.cameraY
+
+		if screenY < -float64(h) || screenY > float64(gs.screenHeight) {
+			continue
+		}
+
+		op := &ebiten.DrawImageOptions{}
+		op.GeoM.Translate(screenX, screenY)
+		screen.DrawImage(tarmacImg, op)
+	}
+}
+
 func (gs *GameplayScreen) drawPetrolStations(screen *ebiten.Image) {
 	face := text.NewGoXFace(bitmapfont.Face)
 	for _, station := range gs.petrolStations {
@@ -2209,13 +2245,6 @@ func (gs *GameplayScreen) drawPetrolStations(screen *ebiten.Image) {
 		if screenY < -50 || screenY > float64(gs.screenHeight)+50 {
 			continue
 		}
-
-		// Draw Tarmac
-		tarmacImg := ebiten.NewImage(100, 80)
-		tarmacImg.Fill(color.RGBA{60, 60, 60, 255}) // Dark grey
-		tarmacOp := &ebiten.DrawImageOptions{}
-		tarmacOp.GeoM.Translate(screenX-30, screenY-20)
-		screen.DrawImage(tarmacImg, tarmacOp)
 
 		// Draw Pump
 		pumpImg := ebiten.NewImage(40, 40)
