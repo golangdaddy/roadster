@@ -619,22 +619,21 @@ func (gs *GameplayScreen) Update() error {
 	leftEdge := -float64(currentSegment.StartLaneIndex) * laneWidth
 	rightEdge := leftEdge + float64(currentSegment.LaneCount)*laneWidth
 	
-	// Interpolate with previous segment if we are in a transition
-	if segmentIdx > 0 {
-		prevSegment := gs.roadSegments[segmentIdx-1]
+	// Interpolate with NEXT segment to match visual ramp ahead
+	if segmentIdx < len(gs.roadSegments)-1 {
+		nextSegment := gs.roadSegments[segmentIdx+1]
 		
-		// Calculate previous segment bounds
-		prevLeftEdge := -float64(prevSegment.StartLaneIndex) * laneWidth
-		prevRightEdge := prevLeftEdge + float64(prevSegment.LaneCount)*laneWidth
+		// Calculate next segment bounds
+		nextLeftEdge := -float64(nextSegment.StartLaneIndex) * laneWidth
+		nextRightEdge := nextLeftEdge + float64(nextSegment.LaneCount)*laneWidth
 		
-		// Use the widest bounds (Union of previous and current)
-		// This allows using the full ramp space immediately/until end
-		if prevLeftEdge < leftEdge {
-			leftEdge = prevLeftEdge
-		}
-		if prevRightEdge > rightEdge {
-			rightEdge = prevRightEdge
-		}
+		// Calculate progress in current segment (0.0 at bottom/start, 1.0 at top/end)
+		progress := (currentSegment.Y - gs.playerCar.Y) / 600.0
+		if progress < 0 { progress = 0 }
+		if progress > 1 { progress = 1 }
+		
+		leftEdge = leftEdge + (nextLeftEdge - leftEdge) * progress
+		rightEdge = rightEdge + (nextRightEdge - rightEdge) * progress
 	}
 	
 	if gs.playerCar.X < leftEdge+10 {
