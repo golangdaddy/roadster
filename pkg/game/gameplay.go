@@ -381,8 +381,8 @@ func (gs *GameplayScreen) generateRoadFromLevel(levelData *LevelData) {
 				laneX := leftEdge + float64(laneIdx)*laneWidth + laneWidth/2
 				
 				station := PetrolStation{
-					X: laneX,
-					Y: y - segmentHeight/2,
+					X:    laneX - 100,
+					Y:    y - segmentHeight/2,
 					Lane: laneIdx,
 				}
 				gs.petrolStations = append(gs.petrolStations, station)
@@ -2209,6 +2209,13 @@ func (gs *GameplayScreen) drawPetrolStations(screen *ebiten.Image) {
 		if screenY < -50 || screenY > float64(gs.screenHeight)+50 {
 			continue
 		}
+
+		// Draw Tarmac
+		tarmacImg := ebiten.NewImage(100, 80)
+		tarmacImg.Fill(color.RGBA{60, 60, 60, 255}) // Dark grey
+		tarmacOp := &ebiten.DrawImageOptions{}
+		tarmacOp.GeoM.Translate(screenX-30, screenY-20)
+		screen.DrawImage(tarmacImg, tarmacOp)
 
 		// Draw Pump
 		pumpImg := ebiten.NewImage(40, 40)
