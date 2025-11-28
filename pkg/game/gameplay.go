@@ -733,19 +733,19 @@ func (gs *GameplayScreen) Update() error {
 		gs.playerCar.VelocityX = 0
 	}
 
-	// Camera follows car smoothly
+	// Camera follows car perfectly on X axis to keep it centered
 	targetX := gs.playerCar.X
 	if gs.onFoot && gs.playerPed != nil {
 		targetX = gs.playerPed.X
 	}
-	targetCameraX := targetX - float64(gs.screenWidth)/2
-	gs.cameraX += (targetCameraX - gs.cameraX) * 0.1
+	gs.cameraX = targetX - float64(gs.screenWidth)/2
 	
 	targetY := gs.playerCar.Y
 	if gs.onFoot && gs.playerPed != nil {
 		targetY = gs.playerPed.Y
 	}
-	targetCameraY := targetY - float64(gs.screenHeight)/2
+	// Offset Y by -125 to show more road ahead (moves camera up relative to car, so car appears lower)
+	targetCameraY := targetY - float64(gs.screenHeight)/2 - 125
 	gs.cameraY += (targetCameraY - gs.cameraY) * 0.1
 
 	// Update distance travelled and fuel
