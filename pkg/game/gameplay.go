@@ -241,6 +241,8 @@ type GameplayScreen struct {
 	paused            bool
 	onFoot            bool
 	playerPed         *PlayerPed
+	autoDrive         bool // Auto-pilot mode
+	autoDriveLane     int  // Target lane for auto-pilot
 }
 
 // NewGameplayScreen creates a new gameplay screen
@@ -278,7 +280,7 @@ func NewGameplayScreen(selectedCar *car.Car, levelData *LevelData, onGameEnd fun
 		VelocityY:        0,
 		SteeringAngle:    0,
 		Acceleration:     0.05, // Reduced for more gradual speed transitions
-		TurnSpeed:        4.0,  // Responsive turning
+		TurnSpeed:        6.0,  // Higher target speed to compensate for inertia
 		SteeringResponse: 0.05, // Smoother steering return
 		SelectedCar:      selectedCar,
 	}
@@ -368,6 +370,113 @@ func (gs *GameplayScreen) generateRoadFromLevel(levelData *LevelData) {
 	}
 }
 
+// isLaneClear checks if a lane is safe to enter
+func (gs *GameplayScreen) isLaneClear(laneIdx int, segment RoadSegment, laneWidth float64) bool {
+	// Check bounds
+	if laneIdx < 0 || laneIdx >= segment.LaneCount {
+		return false
+	}
+
+	leftEdge := -float64(segment.StartLaneIndex) * laneWidth
+	laneCenterX := leftEdge + float64(laneIdx)*laneWidth + laneWidth/2
+
+	gs.trafficMutex.RLock()
+	defer gs.trafficMutex.RUnlock()
+
+	for _, tc := range gs.traffic {
+		// Check lateral overlap (simplified)
+		if math.Abs(tc.X-laneCenterX) < laneWidth/2 {
+			// Check longitudinal distance (needs gap ahead AND behind)
+			dist := math.Abs(tc.Y - gs.playerCar.Y)
+			if dist < 500 { // Needs clearance
+				return false
+			}
+		}
+	}
+	return true
+}
+
+// updateAutoPilot controls the car autonomously
+func (gs *GameplayScreen) updateAutoPilot(currentSegment RoadSegment, laneWidth float64, maxSpeed float64) {
+	// 1. Determine target lane position
+	leftEdge := -float64(currentSegment.StartLaneIndex) * laneWidth
+	targetLaneX := leftEdge + float64(gs.autoDriveLane)*laneWidth + laneWidth/2
+
+	// 2. Check for obstacles in current target lane
+	collisionRisk := false
+	minDist := 800.0 // Look ahead distance
+
+	gs.trafficMutex.RLock()
+	for _, tc := range gs.traffic {
+		// Check if traffic is in our intended lane
+		if math.Abs(tc.X-targetLaneX) < laneWidth/2 {
+			// Check if ahead (PlayerY > TrafficY)
+			if tc.Y < gs.playerCar.Y && tc.Y > gs.playerCar.Y-minDist {
+				collisionRisk = true
+				dist := gs.playerCar.Y - tc.Y
+				if dist < minDist {
+					minDist = dist
+				}
+			}
+		}
+	}
+	gs.trafficMutex.RUnlock()
+
+	// 3. Lane Change Logic
+	// Only change if we aren't already changing (aligned with lane)
+	if math.Abs(gs.playerCar.X - targetLaneX) < 20 {
+		if collisionRisk && minDist < 500 {
+			// Check Left (Limit > 1 to avoid Lane 0)
+			canLeft := gs.autoDriveLane > 1 && gs.isLaneClear(gs.autoDriveLane-1, currentSegment, laneWidth)
+			// Check Right
+			canRight := gs.isLaneClear(gs.autoDriveLane+1, currentSegment, laneWidth)
+
+			if canRight {
+				gs.autoDriveLane++
+			} else if canLeft {
+				gs.autoDriveLane--
+			}
+		} else {
+			// Opportunistically move to faster lanes (Right)
+			if rand.Float64() < 0.005 {
+				if gs.isLaneClear(gs.autoDriveLane+1, currentSegment, laneWidth) {
+					gs.autoDriveLane++
+				}
+			}
+		}
+	}
+
+	// 4. Speed Control
+	targetSpeed := maxSpeed
+	if collisionRisk {
+		if minDist < 200 {
+			targetSpeed = 0 // Brake hard
+		} else {
+			targetSpeed = maxSpeed * 0.5 // Slow down
+		}
+	}
+	
+	if gs.playerCar.VelocityY < targetSpeed {
+		gs.playerCar.VelocityY += gs.playerCar.Acceleration
+	} else if gs.playerCar.VelocityY > targetSpeed {
+		gs.playerCar.VelocityY -= gs.playerCar.Acceleration * 2.0
+	}
+
+	// 5. Steering
+	// Re-calculate target in case lane changed
+	targetLaneX = leftEdge + float64(gs.autoDriveLane)*laneWidth + laneWidth/2
+	errorX := targetLaneX - gs.playerCar.X
+	
+	// P-Controller for steering
+	kp := 0.03
+	steer := errorX * kp
+	// Clamp
+	if steer > 1.0 { steer = 1.0 }
+	if steer < -1.0 { steer = -1.0 }
+	
+	gs.playerCar.SteeringAngle = steer
+}
+
 // Update handles gameplay logic
 func (gs *GameplayScreen) Update() error {
 	if inpututil.IsKeyJustPressed(ebiten.KeyEscape) {
@@ -407,38 +516,10 @@ func (gs *GameplayScreen) Update() error {
 		gs.playerCar.VelocityX *= 0.9
 	} else {
 		// Check for car exit
+		// Check for car exit
 		if inpututil.IsKeyJustPressed(ebiten.KeyEnter) {
 			if math.Abs(gs.playerCar.VelocityY) < 0.5 {
 				gs.exitCar()
-			}
-		}
-
-		// Handle steering input (Left/Right arrow keys)
-		maxSteeringAngle := 1.0
-		steeringInput := 0.08
-
-		if ebiten.IsKeyPressed(ebiten.KeyArrowLeft) {
-			gs.playerCar.SteeringAngle -= steeringInput
-			if gs.playerCar.SteeringAngle < -maxSteeringAngle {
-				gs.playerCar.SteeringAngle = -maxSteeringAngle
-			}
-		} else if ebiten.IsKeyPressed(ebiten.KeyArrowRight) {
-			gs.playerCar.SteeringAngle += steeringInput
-			if gs.playerCar.SteeringAngle > maxSteeringAngle {
-				gs.playerCar.SteeringAngle = maxSteeringAngle
-			}
-		} else {
-			// Return steering to center when no input
-			if gs.playerCar.SteeringAngle > 0 {
-				gs.playerCar.SteeringAngle -= gs.playerCar.SteeringResponse
-				if gs.playerCar.SteeringAngle < 0 {
-					gs.playerCar.SteeringAngle = 0
-				}
-			} else if gs.playerCar.SteeringAngle < 0 {
-				gs.playerCar.SteeringAngle += gs.playerCar.SteeringResponse
-				if gs.playerCar.SteeringAngle > 0 {
-					gs.playerCar.SteeringAngle = 0
-				}
 			}
 		}
 
@@ -447,24 +528,66 @@ func (gs *GameplayScreen) Update() error {
 		speedLimitMPH := 50.0 + float64(currentLane)*10.0
 		maxSpeed := speedLimitMPH / MPHPerPixelPerFrame
 
-		minSpeed := 0.0
-		if ebiten.IsKeyPressed(ebiten.KeyArrowUp) && gs.playerCar.SelectedCar.FuelLevel > 0 {
-			if gs.playerCar.VelocityY < maxSpeed {
-				gs.playerCar.VelocityY += gs.playerCar.Acceleration
-				if gs.playerCar.VelocityY > maxSpeed {
-					gs.playerCar.VelocityY = maxSpeed
+		// Toggle Auto Drive
+		if inpututil.IsKeyJustPressed(ebiten.KeySpace) {
+			gs.autoDrive = !gs.autoDrive
+			if gs.autoDrive {
+				leftEdge := -float64(currentSegment.StartLaneIndex) * laneWidth
+				gs.autoDriveLane = int((gs.playerCar.X - leftEdge) / laneWidth)
+			}
+		}
+
+		if gs.autoDrive {
+			gs.updateAutoPilot(currentSegment, laneWidth, maxSpeed)
+		} else {
+			// Handle steering input (Left/Right arrow keys)
+			maxSteeringAngle := 1.0
+			steeringInput := 0.08
+
+			if ebiten.IsKeyPressed(ebiten.KeyArrowLeft) {
+				gs.playerCar.SteeringAngle -= steeringInput
+				if gs.playerCar.SteeringAngle < -maxSteeringAngle {
+					gs.playerCar.SteeringAngle = -maxSteeringAngle
+				}
+			} else if ebiten.IsKeyPressed(ebiten.KeyArrowRight) {
+				gs.playerCar.SteeringAngle += steeringInput
+				if gs.playerCar.SteeringAngle > maxSteeringAngle {
+					gs.playerCar.SteeringAngle = maxSteeringAngle
+				}
+			} else {
+				// Return steering to center when no input
+				if gs.playerCar.SteeringAngle > 0 {
+					gs.playerCar.SteeringAngle -= gs.playerCar.SteeringResponse
+					if gs.playerCar.SteeringAngle < 0 {
+						gs.playerCar.SteeringAngle = 0
+					}
+				} else if gs.playerCar.SteeringAngle < 0 {
+					gs.playerCar.SteeringAngle += gs.playerCar.SteeringResponse
+					if gs.playerCar.SteeringAngle > 0 {
+						gs.playerCar.SteeringAngle = 0
+					}
 				}
 			}
-		} else if ebiten.IsKeyPressed(ebiten.KeyArrowDown) {
-			gs.playerCar.VelocityY -= gs.playerCar.Acceleration * 3.0
-			if gs.playerCar.VelocityY < minSpeed {
-				gs.playerCar.VelocityY = minSpeed
-			}
-		} else {
-			if gs.playerCar.VelocityY > 0 {
-				gs.playerCar.VelocityY -= gs.playerCar.Acceleration * 0.1
-				if gs.playerCar.VelocityY < 0 {
-					gs.playerCar.VelocityY = 0
+
+			minSpeed := 0.0
+			if ebiten.IsKeyPressed(ebiten.KeyArrowUp) && gs.playerCar.SelectedCar.FuelLevel > 0 {
+				if gs.playerCar.VelocityY < maxSpeed {
+					gs.playerCar.VelocityY += gs.playerCar.Acceleration
+					if gs.playerCar.VelocityY > maxSpeed {
+						gs.playerCar.VelocityY = maxSpeed
+					}
+				}
+			} else if ebiten.IsKeyPressed(ebiten.KeyArrowDown) {
+				gs.playerCar.VelocityY -= gs.playerCar.Acceleration * 3.0
+				if gs.playerCar.VelocityY < minSpeed {
+					gs.playerCar.VelocityY = minSpeed
+				}
+			} else {
+				if gs.playerCar.VelocityY > 0 {
+					gs.playerCar.VelocityY -= gs.playerCar.Acceleration * 0.1
+					if gs.playerCar.VelocityY < 0 {
+						gs.playerCar.VelocityY = 0
+					}
 				}
 			}
 		}
@@ -478,9 +601,14 @@ func (gs *GameplayScreen) Update() error {
 
 		referenceMaxSpeed := 100.0 / MPHPerPixelPerFrame
 		speedFactor := gs.playerCar.VelocityY / referenceMaxSpeed
-		gs.playerCar.VelocityX = gs.playerCar.SteeringAngle * gs.playerCar.TurnSpeed * speedFactor
-
-		gs.playerCar.VelocityX *= 0.95
+		
+		// Calculate target lateral velocity based on steering angle
+		targetVelocityX := gs.playerCar.SteeringAngle * gs.playerCar.TurnSpeed * speedFactor
+		
+		// Apply "grip" or inertia: Interpolate current VelocityX towards target
+		// Lower grip factor = more drift/slide (0.0 = ice, 1.0 = instant turn)
+		gripFactor := 0.2 
+		gs.playerCar.VelocityX += (targetVelocityX - gs.playerCar.VelocityX) * gripFactor
 	}
 
 	// Update car position based on velocity
@@ -1956,6 +2084,15 @@ func (gs *GameplayScreen) drawUI(screen *ebiten.Image) {
 	levelOp.GeoM.Translate(x, y + 50)
 	levelOp.ColorScale.ScaleWithColor(color.RGBA{255, 215, 0, 255}) // Gold
 	text.Draw(screen, levelText, face, levelOp)
+
+	// Draw Auto Pilot Indicator
+	if gs.autoDrive {
+		autoText := "AUTO PILOT"
+		autoOp := &text.DrawOptions{}
+		autoOp.GeoM.Translate(float64(gs.screenWidth)/2-50, 30)
+		autoOp.ColorScale.ScaleWithColor(color.RGBA{0, 255, 255, 255}) // Cyan
+		text.Draw(screen, autoText, face, autoOp)
+	}
 }
 
 // drawSpeedometer draws a speedometer displaying current speed in MPH
