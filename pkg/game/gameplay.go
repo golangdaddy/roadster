@@ -214,9 +214,15 @@ type Car struct {
 	Sprite           *ebiten.Image
 }
 
+type PetrolStation struct {
+	X, Y float64
+	Lane int
+}
+
 // GameplayScreen represents the main driving gameplay
 type GameplayScreen struct {
 	roadSegments []RoadSegment
+	petrolStations []PetrolStation
 	playerCar    *Car
 	traffic      []*TrafficCar // Traffic vehicles
 	trafficMutex sync.RWMutex  // Mutex for safe concurrent access to traffic
@@ -249,6 +255,7 @@ type GameplayScreen struct {
 func NewGameplayScreen(selectedCar *car.Car, levelData *LevelData, onGameEnd func()) *GameplayScreen {
 	gs := &GameplayScreen{
 		roadSegments: make([]RoadSegment, 0),
+		petrolStations: make([]PetrolStation, 0),
 		traffic:      make([]*TrafficCar, 0),
 		scrollSpeed:  2.0,
 		roadTextures: make(map[string]*ebiten.Image),
@@ -365,6 +372,23 @@ func (gs *GameplayScreen) generateRoadFromLevel(levelData *LevelData) {
 			StartLaneIndex: startLaneIdx,
 			Y:              y,
 		}
+		
+		// Check for Petrol Station (Road Type F)
+		laneWidth := 80.0
+		for laneIdx, rt := range roadTypes {
+			if rt == "F" {
+				leftEdge := -float64(startLaneIdx) * laneWidth
+				laneX := leftEdge + float64(laneIdx)*laneWidth + laneWidth/2
+				
+				station := PetrolStation{
+					X: laneX,
+					Y: y - segmentHeight/2,
+					Lane: laneIdx,
+				}
+				gs.petrolStations = append(gs.petrolStations, station)
+			}
+		}
+
 		gs.roadSegments = append(gs.roadSegments, roadSegment)
 		y -= segmentHeight // Segments go upward
 	}
@@ -712,6 +736,21 @@ func (gs *GameplayScreen) Update() error {
 
 	// All segments are pre-generated from level data, no dynamic addition needed
 
+	// Check Petrol Stations
+	if math.Abs(gs.playerCar.VelocityY) < 0.5 { // Stopped or very slow
+		for _, station := range gs.petrolStations {
+			dist := math.Hypot(gs.playerCar.X-station.X, gs.playerCar.Y-station.Y)
+			if dist < 80 {
+				if gs.playerCar.SelectedCar.FuelLevel < gs.playerCar.SelectedCar.FuelCapacity {
+					gs.playerCar.SelectedCar.FuelLevel += 0.5
+					if gs.playerCar.SelectedCar.FuelLevel > gs.playerCar.SelectedCar.FuelCapacity {
+						gs.playerCar.SelectedCar.FuelLevel = gs.playerCar.SelectedCar.FuelCapacity
+					}
+				}
+			}
+		}
+	}
+
 	return nil
 }
 
@@ -723,6 +762,7 @@ func (gs *GameplayScreen) Draw(screen *ebiten.Image) {
 
 	// Draw road segments
 	gs.drawRoad(screen)
+	gs.drawPetrolStations(screen)
 
 	// Draw traffic (behind player car)
 	gs.drawTraffic(screen)
@@ -2091,6 +2131,45 @@ func (gs *GameplayScreen) drawUI(screen *ebiten.Image) {
 		autoOp.GeoM.Translate(float64(gs.screenWidth)/2-50, 30)
 		autoOp.ColorScale.ScaleWithColor(color.RGBA{0, 255, 255, 255}) // Cyan
 		text.Draw(screen, autoText, face, autoOp)
+	}
+}
+
+func (gs *GameplayScreen) drawPetrolStations(screen *ebiten.Image) {
+	face := text.NewGoXFace(bitmapfont.Face)
+	for _, station := range gs.petrolStations {
+		// Calculate screen pos
+		screenX := station.X - gs.cameraX - 20
+		screenY := station.Y - gs.cameraY - 20
+
+		// Only draw if visible
+		if screenY < -50 || screenY > float64(gs.screenHeight)+50 {
+			continue
+		}
+
+		// Draw Pump
+		pumpImg := ebiten.NewImage(40, 40)
+		pumpImg.Fill(color.RGBA{255, 50, 50, 255}) // Red box
+		// Draw "P"
+		for i := 10; i < 30; i++ {
+			pumpImg.Set(i, 10, color.White)
+			pumpImg.Set(i, 20, color.White)
+		}
+		for i := 10; i < 30; i++ {
+			pumpImg.Set(10, i, color.White)
+		}
+		for i := 10; i < 20; i++ {
+			pumpImg.Set(30, i, color.White)
+		}
+
+		op := &ebiten.DrawImageOptions{}
+		op.GeoM.Translate(screenX, screenY)
+		screen.DrawImage(pumpImg, op)
+
+		// Draw "FUEL" text
+		textOp := &text.DrawOptions{}
+		textOp.GeoM.Translate(screenX, screenY-15)
+		textOp.ColorScale.ScaleWithColor(color.White)
+		text.Draw(screen, "FUEL", face, textOp)
 	}
 }
 
