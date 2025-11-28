@@ -422,6 +422,8 @@ func (gs *GameplayScreen) isLaneClear(laneIdx int, segment RoadSegment, laneWidt
 
 // updateAutoPilot controls the car autonomously
 func (gs *GameplayScreen) updateAutoPilot(currentSegment RoadSegment, segmentIdx int, laneWidth float64, maxSpeed float64) {
+	laneChanged := false
+
 	// 1. Determine target lane position (and interpolated bounds)
 	startLeftEdge := -float64(currentSegment.StartLaneIndex) * laneWidth
 	// Default bounds (full segment width)
@@ -433,20 +435,24 @@ func (gs *GameplayScreen) updateAutoPilot(currentSegment RoadSegment, segmentIdx
 		nextSegment := gs.roadSegments[segmentIdx+1]
 		nextLeft := -float64(nextSegment.StartLaneIndex) * laneWidth
 		nextRight := nextLeft + float64(nextSegment.LaneCount)*laneWidth
-		
+
 		progress := (currentSegment.Y - gs.playerCar.Y) / 600.0
-		if progress < 0 { progress = 0 }
-		if progress > 1 { progress = 1 }
-		
-		boundRight = boundRight + (nextRight - boundRight) * progress
-		boundLeft = boundLeft + (nextLeft - boundLeft) * progress
+		if progress < 0 {
+			progress = 0
+		}
+		if progress > 1 {
+			progress = 1
+		}
+
+		boundRight = boundRight + (nextRight-boundRight)*progress
+		boundLeft = boundLeft + (nextLeft-boundLeft)*progress
 	}
 
 	targetLaneX := startLeftEdge + float64(gs.autoDriveLane)*laneWidth + laneWidth/2
 
 	// 2. Check for obstacles in current target lane
 	collisionRisk := false
-	minDist := 800.0 // Look ahead distance
+	minDist := 800.0 // Look ahead distance (Decision Distance)
 
 	gs.trafficMutex.RLock()
 	for _, tc := range gs.traffic {
@@ -482,14 +488,16 @@ func (gs *GameplayScreen) updateAutoPilot(currentSegment RoadSegment, segmentIdx
 		laneCenterX := startLeftEdge + float64(gs.autoDriveLane)*laneWidth + laneWidth/2
 		if laneCenterX > boundRight-40 && gs.autoDriveLane > 0 {
 			gs.autoDriveLane--
+			laneChanged = true
 		} else if laneCenterX < boundLeft+40 && gs.autoDriveLane < currentSegment.LaneCount-1 {
 			gs.autoDriveLane++
+			laneChanged = true
 		}
 	}
 
 	// 3. Lane Change Logic
 	// Only change if we aren't already changing (aligned with lane)
-	if math.Abs(gs.playerCar.X - targetLaneX) < 20 {
+	if math.Abs(gs.playerCar.X-targetLaneX) < 20 {
 		if collisionRisk && minDist < 500 {
 			// Check Left (Limit > 1 to avoid Lane 0)
 			canLeft := gs.autoDriveLane > 1 && checkAvailability(gs.autoDriveLane-1) && gs.isLaneClear(gs.autoDriveLane-1, currentSegment, laneWidth)
@@ -498,14 +506,17 @@ func (gs *GameplayScreen) updateAutoPilot(currentSegment RoadSegment, segmentIdx
 
 			if canRight {
 				gs.autoDriveLane++
+				laneChanged = true
 			} else if canLeft {
 				gs.autoDriveLane--
+				laneChanged = true
 			}
 		} else {
 			// Opportunistically move to faster lanes (Right)
 			if rand.Float64() < 0.005 && gs.autoDriveLane < currentSegment.LaneCount-1 {
 				if checkAvailability(gs.autoDriveLane+1) && gs.isLaneClear(gs.autoDriveLane+1, currentSegment, laneWidth) {
 					gs.autoDriveLane++
+					laneChanged = true
 				}
 			}
 		}
@@ -513,14 +524,14 @@ func (gs *GameplayScreen) updateAutoPilot(currentSegment RoadSegment, segmentIdx
 
 	// 4. Speed Control
 	targetSpeed := maxSpeed
-	if collisionRisk {
+	if collisionRisk && !laneChanged {
 		if minDist < 200 {
 			targetSpeed = 0 // Brake hard
-		} else {
-			targetSpeed = maxSpeed * 0.5 // Slow down
+		} else if minDist < 500 {
+			targetSpeed = maxSpeed * 0.7 // Gentle Slow down
 		}
 	}
-	
+
 	if math.Abs(gs.playerCar.VelocityY-targetSpeed) < 0.1 {
 		gs.playerCar.VelocityY = targetSpeed
 	} else if gs.playerCar.VelocityY < targetSpeed {
@@ -533,14 +544,18 @@ func (gs *GameplayScreen) updateAutoPilot(currentSegment RoadSegment, segmentIdx
 	// Re-calculate target in case lane changed
 	targetLaneX = startLeftEdge + float64(gs.autoDriveLane)*laneWidth + laneWidth/2
 	errorX := targetLaneX - gs.playerCar.X
-	
+
 	// P-Controller for steering
 	kp := 0.03
 	steer := errorX * kp
 	// Clamp
-	if steer > 1.0 { steer = 1.0 }
-	if steer < -1.0 { steer = -1.0 }
-	
+	if steer > 1.0 {
+		steer = 1.0
+	}
+	if steer < -1.0 {
+		steer = -1.0
+	}
+
 	gs.playerCar.SteeringAngle = steer
 }
 
