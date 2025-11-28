@@ -421,10 +421,28 @@ func (gs *GameplayScreen) isLaneClear(laneIdx int, segment RoadSegment, laneWidt
 }
 
 // updateAutoPilot controls the car autonomously
-func (gs *GameplayScreen) updateAutoPilot(currentSegment RoadSegment, laneWidth float64, maxSpeed float64) {
-	// 1. Determine target lane position
-	leftEdge := -float64(currentSegment.StartLaneIndex) * laneWidth
-	targetLaneX := leftEdge + float64(gs.autoDriveLane)*laneWidth + laneWidth/2
+func (gs *GameplayScreen) updateAutoPilot(currentSegment RoadSegment, segmentIdx int, laneWidth float64, maxSpeed float64) {
+	// 1. Determine target lane position (and interpolated bounds)
+	startLeftEdge := -float64(currentSegment.StartLaneIndex) * laneWidth
+	// Default bounds (full segment width)
+	boundRight := startLeftEdge + float64(currentSegment.LaneCount)*laneWidth
+	boundLeft := startLeftEdge
+
+	// Interpolate bounds to match physics (Check availability of space)
+	if segmentIdx < len(gs.roadSegments)-1 {
+		nextSegment := gs.roadSegments[segmentIdx+1]
+		nextLeft := -float64(nextSegment.StartLaneIndex) * laneWidth
+		nextRight := nextLeft + float64(nextSegment.LaneCount)*laneWidth
+		
+		progress := (currentSegment.Y - gs.playerCar.Y) / 600.0
+		if progress < 0 { progress = 0 }
+		if progress > 1 { progress = 1 }
+		
+		boundRight = boundRight + (nextRight - boundRight) * progress
+		boundLeft = boundLeft + (nextLeft - boundLeft) * progress
+	}
+
+	targetLaneX := startLeftEdge + float64(gs.autoDriveLane)*laneWidth + laneWidth/2
 
 	// 2. Check for obstacles in current target lane
 	collisionRisk := false
@@ -446,14 +464,37 @@ func (gs *GameplayScreen) updateAutoPilot(currentSegment RoadSegment, laneWidth 
 	}
 	gs.trafficMutex.RUnlock()
 
+	// Helper to check physical availability of lane
+	checkAvailability := func(laneIdx int) bool {
+		laneCenterX := startLeftEdge + float64(laneIdx)*laneWidth + laneWidth/2
+		// Strict margin: center must be inside bounds by half lane width
+		if laneCenterX > boundRight-40 {
+			return false
+		}
+		if laneCenterX < boundLeft+40 {
+			return false
+		}
+		return true
+	}
+
+	// 2.5 Emergency Wall Avoidance (Prioritize over traffic)
+	if !checkAvailability(gs.autoDriveLane) {
+		laneCenterX := startLeftEdge + float64(gs.autoDriveLane)*laneWidth + laneWidth/2
+		if laneCenterX > boundRight-40 && gs.autoDriveLane > 0 {
+			gs.autoDriveLane--
+		} else if laneCenterX < boundLeft+40 && gs.autoDriveLane < currentSegment.LaneCount-1 {
+			gs.autoDriveLane++
+		}
+	}
+
 	// 3. Lane Change Logic
 	// Only change if we aren't already changing (aligned with lane)
 	if math.Abs(gs.playerCar.X - targetLaneX) < 20 {
 		if collisionRisk && minDist < 500 {
 			// Check Left (Limit > 1 to avoid Lane 0)
-			canLeft := gs.autoDriveLane > 1 && gs.isLaneClear(gs.autoDriveLane-1, currentSegment, laneWidth)
+			canLeft := gs.autoDriveLane > 1 && checkAvailability(gs.autoDriveLane-1) && gs.isLaneClear(gs.autoDriveLane-1, currentSegment, laneWidth)
 			// Check Right
-			canRight := gs.isLaneClear(gs.autoDriveLane+1, currentSegment, laneWidth)
+			canRight := gs.autoDriveLane < currentSegment.LaneCount-1 && checkAvailability(gs.autoDriveLane+1) && gs.isLaneClear(gs.autoDriveLane+1, currentSegment, laneWidth)
 
 			if canRight {
 				gs.autoDriveLane++
@@ -462,8 +503,8 @@ func (gs *GameplayScreen) updateAutoPilot(currentSegment RoadSegment, laneWidth 
 			}
 		} else {
 			// Opportunistically move to faster lanes (Right)
-			if rand.Float64() < 0.005 {
-				if gs.isLaneClear(gs.autoDriveLane+1, currentSegment, laneWidth) {
+			if rand.Float64() < 0.005 && gs.autoDriveLane < currentSegment.LaneCount-1 {
+				if checkAvailability(gs.autoDriveLane+1) && gs.isLaneClear(gs.autoDriveLane+1, currentSegment, laneWidth) {
 					gs.autoDriveLane++
 				}
 			}
@@ -480,7 +521,9 @@ func (gs *GameplayScreen) updateAutoPilot(currentSegment RoadSegment, laneWidth 
 		}
 	}
 	
-	if gs.playerCar.VelocityY < targetSpeed {
+	if math.Abs(gs.playerCar.VelocityY-targetSpeed) < 0.1 {
+		gs.playerCar.VelocityY = targetSpeed
+	} else if gs.playerCar.VelocityY < targetSpeed {
 		gs.playerCar.VelocityY += gs.playerCar.Acceleration
 	} else if gs.playerCar.VelocityY > targetSpeed {
 		gs.playerCar.VelocityY -= gs.playerCar.Acceleration * 2.0
@@ -488,7 +531,7 @@ func (gs *GameplayScreen) updateAutoPilot(currentSegment RoadSegment, laneWidth 
 
 	// 5. Steering
 	// Re-calculate target in case lane changed
-	targetLaneX = leftEdge + float64(gs.autoDriveLane)*laneWidth + laneWidth/2
+	targetLaneX = startLeftEdge + float64(gs.autoDriveLane)*laneWidth + laneWidth/2
 	errorX := targetLaneX - gs.playerCar.X
 	
 	// P-Controller for steering
@@ -562,7 +605,7 @@ func (gs *GameplayScreen) Update() error {
 		}
 
 		if gs.autoDrive {
-			gs.updateAutoPilot(currentSegment, laneWidth, maxSpeed)
+			gs.updateAutoPilot(currentSegment, segmentIdx, laneWidth, maxSpeed)
 		} else {
 			// Handle steering input (Left/Right arrow keys)
 			maxSteeringAngle := 1.0
@@ -595,7 +638,9 @@ func (gs *GameplayScreen) Update() error {
 
 			minSpeed := 0.0
 			if ebiten.IsKeyPressed(ebiten.KeyArrowUp) && gs.playerCar.SelectedCar.FuelLevel > 0 {
-				if gs.playerCar.VelocityY < maxSpeed {
+				if math.Abs(gs.playerCar.VelocityY-maxSpeed) < gs.playerCar.Acceleration {
+					gs.playerCar.VelocityY = maxSpeed
+				} else if gs.playerCar.VelocityY < maxSpeed {
 					gs.playerCar.VelocityY += gs.playerCar.Acceleration
 					if gs.playerCar.VelocityY > maxSpeed {
 						gs.playerCar.VelocityY = maxSpeed
@@ -617,9 +662,13 @@ func (gs *GameplayScreen) Update() error {
 		}
 
 		if gs.playerCar.VelocityY > maxSpeed {
-			gs.playerCar.VelocityY -= 0.02
-			if gs.playerCar.VelocityY < maxSpeed {
+			if gs.playerCar.VelocityY-maxSpeed < 0.05 {
 				gs.playerCar.VelocityY = maxSpeed
+			} else {
+				gs.playerCar.VelocityY -= 0.02
+				if gs.playerCar.VelocityY < maxSpeed {
+					gs.playerCar.VelocityY = maxSpeed
+				}
 			}
 		}
 
