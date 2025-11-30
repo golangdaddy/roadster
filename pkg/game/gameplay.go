@@ -481,7 +481,8 @@ func (gs *GameplayScreen) updateAutoPilot(currentSegment RoadSegment, segmentIdx
 
 	// 2. Check for obstacles in current target lane
 	collisionRisk := false
-	minDist := 800.0 // Look ahead distance (Decision Distance)
+	minDist := 800.0 // Look ahead distance for awareness
+	closeObstacleDist := 400.0 // Distance that actually requires speed reduction
 
 	gs.trafficMutex.RLock()
 	for _, tc := range gs.traffic {
@@ -489,10 +490,13 @@ func (gs *GameplayScreen) updateAutoPilot(currentSegment RoadSegment, segmentIdx
 		if math.Abs(tc.X-targetLaneX) < laneWidth/2 {
 			// Check if ahead (PlayerY > TrafficY)
 			if tc.Y < gs.playerCar.Y && tc.Y > gs.playerCar.Y-minDist {
-				collisionRisk = true
 				dist := gs.playerCar.Y - tc.Y
 				if dist < minDist {
 					minDist = dist
+				}
+				// Only consider it a collision risk if it's close enough to affect speed
+				if dist < closeObstacleDist {
+					collisionRisk = true
 				}
 			}
 		}
@@ -557,14 +561,21 @@ func (gs *GameplayScreen) updateAutoPilot(currentSegment RoadSegment, segmentIdx
 		}
 	}
 
-	// 4. Speed Control
+	// 4. Speed Control - Maintain maximum speed when road is clear
 	targetSpeed := maxSpeed
-	if collisionRisk && !laneChanged {
-		if minDist < 200 {
-			targetSpeed = 0 // Brake hard
-		} else if minDist < 500 {
-			targetSpeed = maxSpeed * 0.7 // Gentle Slow down
+
+	// Only slow down if there's a CLOSE obstacle (not just any traffic ahead)
+	if collisionRisk && minDist < 300 && !laneChanged {
+		if minDist < 150 {
+			targetSpeed = 0 // Brake hard for very close obstacles
+		} else if minDist < 300 {
+			targetSpeed = maxSpeed * 0.8 // Gentle slow down for closer obstacles
 		}
+	}
+
+	// If no collision risk at all, ensure we're at max speed
+	if !collisionRisk {
+		targetSpeed = maxSpeed
 	}
 
 	if math.Abs(gs.playerCar.VelocityY-targetSpeed) < 0.1 {
