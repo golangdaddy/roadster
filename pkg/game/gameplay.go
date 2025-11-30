@@ -5,7 +5,6 @@ import (
 	"image/color"
 	"math"
 	"math/rand"
-	"sort"
 	"sync"
 	"time"
 
@@ -36,6 +35,8 @@ type TrafficCar struct {
 	X, Y         float64    // World position
 	VelocityY    float64    // Vertical velocity (current speed)
 	TargetSpeed  float64    // Desired speed (based on speed limit)
+	Acceleration float64    // Acceleration rate
+	Deceleration float64    // Deceleration/Braking rate
 	Lane         int        // Which lane this car is in
 	TargetLane   int        // Lane moving towards (if changing)
 	LaneProgress float64    // 0.0 to 1.0 for visual transition
@@ -75,11 +76,13 @@ func (tc *TrafficCar) Update(gs *GameplayScreen) {
 	rightLaneBlocked := false
 	leftLaneBlocked := false
 
-	// Check against other traffic
+	// Check against other traffic - cars are now aware of ALL nearby cars
 	for _, other := range gs.traffic {
 		if other == tc {
 			continue
 		}
+
+		// Check cars in same lane
 		if other.Lane == tc.Lane {
 			// Check if other car is ahead (Y is smaller)
 			if other.Y < tc.Y {
@@ -91,17 +94,32 @@ func (tc *TrafficCar) Update(gs *GameplayScreen) {
 				}
 			}
 		}
+
 		// Check if right lane is blocked (for lane change)
-		// Check if car is in target lane or moving to it
-		if other.Lane == tc.Lane+1 || (other.TargetLane == tc.Lane+1 && other.LaneProgress > 0) {
-			if math.Abs(tc.Y-other.Y) < minTrafficDistance*2.0 {
+		// Include cars transitioning to/from the target lane
+		if other.Lane == tc.Lane+1 || (other.TargetLane == tc.Lane+1 && other.LaneProgress > 0.3) {
+			if math.Abs(tc.Y-other.Y) < minTrafficDistance*1.5 {
 				rightLaneBlocked = true
 			}
 		}
 		// Check if left lane is blocked
-		if other.Lane == tc.Lane-1 || (other.TargetLane == tc.Lane-1 && other.LaneProgress > 0) {
-			if math.Abs(tc.Y-other.Y) < minTrafficDistance*2.0 {
+		if other.Lane == tc.Lane-1 || (other.TargetLane == tc.Lane-1 && other.LaneProgress > 0.3) {
+			if math.Abs(tc.Y-other.Y) < minTrafficDistance*1.5 {
 				leftLaneBlocked = true
+			}
+		}
+
+		// Also check cars in adjacent lanes that might affect our decision
+		// This makes cars more aware of their surroundings
+		if other.Lane == tc.Lane+1 || other.Lane == tc.Lane-1 {
+			// If a car in adjacent lane is very close, be more cautious about lane changes
+			if math.Abs(tc.Y-other.Y) < minTrafficDistance*0.8 {
+				if other.Lane == tc.Lane+1 {
+					rightLaneBlocked = true
+				}
+				if other.Lane == tc.Lane-1 {
+					leftLaneBlocked = true
+				}
 			}
 		}
 	}
@@ -410,9 +428,10 @@ func (gs *GameplayScreen) isLaneClear(laneIdx int, segment RoadSegment, laneWidt
 	for _, tc := range gs.traffic {
 		// Check lateral overlap (simplified)
 		if math.Abs(tc.X-laneCenterX) < laneWidth/2 {
-			// Check longitudinal distance (needs gap ahead AND behind)
-			dist := math.Abs(tc.Y - gs.playerCar.Y)
-			if dist < 500 { // Needs clearance
+			// Check longitudinal distance - more lenient for auto-drive
+			dist := tc.Y - gs.playerCar.Y // Positive = ahead, negative = behind
+			// Need clearance ahead, but less behind
+			if dist > -100 && dist < 200 { // Only need 200px ahead, 100px behind
 				return false
 			}
 		}
@@ -495,29 +514,57 @@ func (gs *GameplayScreen) updateAutoPilot(currentSegment RoadSegment, segmentIdx
 		}
 	}
 
-	// 3. Lane Change Logic
+	// 3. Lane Change Logic - More aggressive, human-like driving
 	// Only change if we aren't already changing (aligned with lane)
 	if math.Abs(gs.playerCar.X-targetLaneX) < 20 {
-		if collisionRisk && minDist < 500 {
-			// Check Left (Limit > 1 to avoid Lane 0)
-			canLeft := gs.autoDriveLane > 1 && checkAvailability(gs.autoDriveLane-1) && gs.isLaneClear(gs.autoDriveLane-1, currentSegment, laneWidth)
-			// Check Right
-			canRight := gs.autoDriveLane < currentSegment.LaneCount-1 && checkAvailability(gs.autoDriveLane+1) && gs.isLaneClear(gs.autoDriveLane+1, currentSegment, laneWidth)
+		// Always check for overtaking opportunities (being stuck behind slow traffic)
+		shouldChangeLanes := false
+		preferredDirection := 0 // 1=right, -1=left
 
-			if canRight {
+		// If we're significantly slower than our target speed, try to overtake
+		currentSpeedMPH := gs.playerCar.VelocityY * MPHPerPixelPerFrame
+		if currentSpeedMPH < maxSpeed*0.8 && collisionRisk {
+			shouldChangeLanes = true
+			// Prefer right lane (faster) for overtaking
+			preferredDirection = 1
+		}
+
+		// Emergency lane change if very close to traffic
+		if collisionRisk && minDist < 300 {
+			shouldChangeLanes = true
+			preferredDirection = 1 // Emergency: go right
+		}
+
+		// Opportunistic lane changes (more frequent than before)
+		if !shouldChangeLanes && rand.Float64() < 0.02 { // 2% chance per frame
+			// Try to move to lane 0 (fastest) if possible
+			if gs.autoDriveLane > 0 && checkAvailability(0) && gs.isLaneClear(0, currentSegment, laneWidth) {
+				gs.autoDriveLane = 0
+				laneChanged = true
+			} else if gs.autoDriveLane < currentSegment.LaneCount-1 && checkAvailability(gs.autoDriveLane+1) && gs.isLaneClear(gs.autoDriveLane+1, currentSegment, laneWidth) {
+				gs.autoDriveLane++
+				laneChanged = true
+			}
+		}
+
+		if shouldChangeLanes {
+			// Check Right first (preferred for overtaking)
+			canRight := gs.autoDriveLane < currentSegment.LaneCount-1 && checkAvailability(gs.autoDriveLane+1) && gs.isLaneClear(gs.autoDriveLane+1, currentSegment, laneWidth)
+			// Check Left (including lane 0 now)
+			canLeft := gs.autoDriveLane > 0 && checkAvailability(gs.autoDriveLane-1) && gs.isLaneClear(gs.autoDriveLane-1, currentSegment, laneWidth)
+
+			if preferredDirection == 1 && canRight {
+				gs.autoDriveLane++
+				laneChanged = true
+			} else if preferredDirection == -1 && canLeft {
+				gs.autoDriveLane--
+				laneChanged = true
+			} else if canRight {
 				gs.autoDriveLane++
 				laneChanged = true
 			} else if canLeft {
 				gs.autoDriveLane--
 				laneChanged = true
-			}
-		} else {
-			// Opportunistically move to faster lanes (Right)
-			if rand.Float64() < 0.005 && gs.autoDriveLane < currentSegment.LaneCount-1 {
-				if checkAvailability(gs.autoDriveLane+1) && gs.isLaneClear(gs.autoDriveLane+1, currentSegment, laneWidth) {
-					gs.autoDriveLane++
-					laneChanged = true
-				}
 			}
 		}
 	}
@@ -607,15 +654,27 @@ func (gs *GameplayScreen) Update() error {
 
 		// Calculate current lane and speed limit
 		currentLane := gs.getCurrentLane(currentSegment, laneWidth)
-		speedLimitMPH := 50.0 + float64(currentLane)*10.0
+		// Map rendered lane index to character position for speed calculation
+		lanePosition := currentLane
+		if currentLane < len(currentSegment.LanePositions) {
+			lanePosition = currentSegment.LanePositions[currentLane]
+		}
+		speedLimitMPH := 50.0 + float64(lanePosition)*10.0 - 5.0
 		maxSpeed := speedLimitMPH / MPHPerPixelPerFrame
 
 		// Toggle Auto Drive
 		if inpututil.IsKeyJustPressed(ebiten.KeySpace) {
 			gs.autoDrive = !gs.autoDrive
 			if gs.autoDrive {
-				leftEdge := -float64(currentSegment.StartLaneIndex) * laneWidth
-				gs.autoDriveLane = int((gs.playerCar.X - leftEdge) / laneWidth)
+				// Start in lane 0 (fastest lane) for aggressive driving
+				// But check if lane 0 is available first
+				if currentSegment.LaneCount > 0 && gs.isLaneClear(0, currentSegment, laneWidth) {
+					gs.autoDriveLane = 0
+				} else {
+					// Fallback to current lane
+					leftEdge := -float64(currentSegment.StartLaneIndex) * laneWidth
+					gs.autoDriveLane = int((gs.playerCar.X - leftEdge) / laneWidth)
+				}
 			}
 		}
 
@@ -1554,16 +1613,16 @@ func (gs *GameplayScreen) getSegmentAt(y float64) RoadSegment {
 }
 
 // getCurrentLane determines which lane the car is currently in
-// Returns the character position in the level file (position 0 = lane 0, even if it's X)
+// Returns the rendered lane index (0, 1, 2...) for consistency with traffic cars
 func (gs *GameplayScreen) getCurrentLane(segment RoadSegment, laneWidth float64) int {
 	// Calculate the left edge of the road segment
 	leftEdge := -float64(segment.StartLaneIndex) * laneWidth
-	
+
 	// Calculate which rendered lane the car is in based on its X position
 	// Lane 0 starts at leftEdge, each lane is laneWidth wide
 	relativeX := gs.playerCar.X - leftEdge
 	renderedLaneIndex := int(relativeX / laneWidth)
-	
+
 	// Clamp rendered lane index to valid range
 	if renderedLaneIndex < 0 {
 		renderedLaneIndex = 0
@@ -1571,15 +1630,8 @@ func (gs *GameplayScreen) getCurrentLane(segment RoadSegment, laneWidth float64)
 	if renderedLaneIndex >= segment.LaneCount {
 		renderedLaneIndex = segment.LaneCount - 1
 	}
-	
-	// Map rendered lane index to character position in level file
-	// This ensures position 0 in the level file is always lane 0, even if it's 'X'
-	if renderedLaneIndex < len(segment.LanePositions) {
-		return segment.LanePositions[renderedLaneIndex]
-	}
-	
-	// Fallback: if no mapping exists, return the rendered index (shouldn't happen)
-	return renderedLaneIndex
+
+	return renderedLaneIndex // Return rendered lane index (0, 1, 2...)
 }
 
 // checkCollisions checks if the player car collides with any traffic vehicles
@@ -1673,23 +1725,61 @@ func (gs *GameplayScreen) cleanupTraffic() {
 // updateTraffic updates traffic positions and spawns new traffic vehicles
 func (gs *GameplayScreen) updateTraffic(scrollSpeed float64, currentSegment RoadSegment, laneWidth float64) {
 	playerY := gs.playerCar.Y
-	
+
 	// Update existing traffic positions
 	gs.trafficMutex.Lock()
+
+	// First pass: Run AI logic for all cars so they become aware of each other
 	for i := 0; i < len(gs.traffic); i++ {
 		tc := gs.traffic[i]
-		
-		// Traffic moves relative to player: if traffic is slower, it moves up (toward player)
-		// If traffic is faster, it moves down (away from player)
-		// Since Y decreases upward, we subtract the absolute speed to move up
-		tc.Y -= tc.VelocityY
-		
+		tc.Update(gs)
+	}
+
+	// Second pass: Apply movement with collision prevention
+	for i := 0; i < len(gs.traffic); i++ {
+		tc := gs.traffic[i]
+
+		// Calculate desired new position
+		desiredY := tc.Y - tc.VelocityY
+
+		// Check for collisions with other cars in same lane or transitioning lanes
+		canMove := true
+		for j := 0; j < len(gs.traffic); j++ {
+			if i == j {
+				continue
+			}
+
+			other := gs.traffic[j]
+			// Check if other car is in same lane or transitioning to our lane
+			inSameLane := other.Lane == tc.Lane
+			transitioningToOurLane := (other.TargetLane == tc.Lane && other.LaneProgress > 0.5) ||
+				(tc.TargetLane == other.Lane && tc.LaneProgress > 0.5)
+
+			if inSameLane || transitioningToOurLane {
+				// Check if moving would cause collision
+				if math.Abs(desiredY - other.Y) < minTrafficDistance {
+					canMove = false
+					break
+				}
+			}
+		}
+
+		// Only move if no collision would occur
+		if canMove {
+			tc.Y = desiredY
+		} else {
+			// If we can't move forward, slow down significantly to prevent pile-ups
+			tc.VelocityY *= 0.7
+			// Apply some movement but much slower
+			tc.Y -= tc.VelocityY * 0.3
+		}
+
 		// Check if player has passed this car (overtaken)
 		// Player Y < Traffic Y means Player is AHEAD (further up the road)
 		if !tc.Passed && gs.playerCar.Y < tc.Y {
 			tc.Passed = true
 			gs.TotalCarsPassed++
-			
+
 			// Level Up Logic
 			if gs.TotalCarsPassed >= gs.LevelThreshold {
 				gs.Level++
@@ -1697,7 +1787,7 @@ func (gs *GameplayScreen) updateTraffic(scrollSpeed float64, currentSegment Road
 				gs.LevelThreshold = int(float64(gs.LevelThreshold) * 1.5)
 			}
 		}
-		
+
 		// Handle lane changing
 		if tc.LaneProgress > 0 {
 			// Increment progress
@@ -1705,25 +1795,25 @@ func (gs *GameplayScreen) updateTraffic(scrollSpeed float64, currentSegment Road
 			if tc.LaneProgress > 1.0 {
 				tc.LaneProgress = 1.0
 			}
-			
+
 			// Get traffic segment for accurate lane positioning
 			tcSegment := gs.getSegmentAt(tc.Y)
-			
+
 			// Calculate positions
 			leftEdge := -float64(tcSegment.StartLaneIndex) * laneWidth
 			startX := leftEdge + float64(tc.Lane)*laneWidth + laneWidth/2
 			endX := leftEdge + float64(tc.TargetLane)*laneWidth + laneWidth/2
-			
+
 			// Lerp X
 			tc.X = startX + (endX - startX) * tc.LaneProgress
-			
+
 			// Complete transition
 			if tc.LaneProgress >= 1.0 {
 				tc.Lane = tc.TargetLane
 				tc.TargetLane = 0
 				tc.LaneProgress = 0
 				tc.LastLaneChangeTime = time.Now().UnixMilli()
-				
+
 				// Update TargetSpeed for new lane
 				lanePosition := tc.Lane
 				if tc.Lane < len(tcSegment.LanePositions) {
@@ -1733,7 +1823,7 @@ func (gs *GameplayScreen) updateTraffic(scrollSpeed float64, currentSegment Road
 				tc.TargetSpeed = speedLimitMPH / MPHPerPixelPerFrame
 			}
 		}
-		
+
 		// Remove traffic that's too far off screen (beyond spawn range)
 		if tc.Y > playerY+trafficSpawnRange+500 || tc.Y < playerY-trafficSpawnRange-500 {
 			// Remove from slice
@@ -1741,39 +1831,10 @@ func (gs *GameplayScreen) updateTraffic(scrollSpeed float64, currentSegment Road
 			i--
 			continue
 		}
-		
-		// Run AI logic
-		tc.Update(gs)
 	}
 
-	// Enforce ordering within each lane so cars never overtake
-	laneCars := make(map[int][]*TrafficCar)
-	for _, tc := range gs.traffic {
-		laneCars[tc.Lane] = append(laneCars[tc.Lane], tc)
-	}
-
-	for _, cars := range laneCars {
-		sort.Slice(cars, func(i, j int) bool {
-			return cars[i].Y < cars[j].Y // smaller Y is further ahead
-		})
-
-		for i := 1; i < len(cars); i++ {
-			ahead := cars[i-1]
-			behind := cars[i]
-
-			minAllowedY := ahead.Y + minTrafficDistance
-			if behind.Y < minAllowedY {
-				behind.Y = minAllowedY
-			}
-
-			// Ensure the car behind is not faster than the car ahead
-			if behind.VelocityY > ahead.VelocityY {
-				behind.VelocityY = ahead.VelocityY
-			}
-		}
-	}
 	gs.trafficMutex.Unlock()
-	
+
 	// Spawn new traffic vehicles
 	gs.spawnTraffic(currentSegment, laneWidth, playerY)
 }
@@ -1915,6 +1976,8 @@ func (gs *GameplayScreen) spawnTrafficInDirection(segment RoadSegment, laneWidth
 		Y:           spawnY,
 		VelocityY:   trafficVelocityY,
 		TargetSpeed: trafficVelocityY,
+		Acceleration: 0.05, // Same as player
+		Deceleration: 0.1,  // Better braking
 		Lane:        lane,
 		Color:       carColor,
 		Passed:      !ahead, // If spawned behind, it's already passed
@@ -2190,7 +2253,12 @@ func (gs *GameplayScreen) drawSpeedometer(screen *ebiten.Image) {
 	currentSegment, _ := gs.getCurrentRoadSegment()
 	laneWidth := 80.0
 	currentLane := gs.getCurrentLane(currentSegment, laneWidth)
-	speedLimitMPH := 50.0 + float64(currentLane)*10.0
+	// Map rendered lane index to character position for speed calculation
+	lanePosition := currentLane
+	if currentLane < len(currentSegment.LanePositions) {
+		lanePosition = currentSegment.LanePositions[currentLane]
+	}
+	speedLimitMPH := 50.0 + float64(lanePosition)*10.0 - 5.0
 	
 	// Position in top-left corner
 	x := 20.0
