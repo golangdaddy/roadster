@@ -27,7 +27,7 @@ const (
 	minTrafficDistance     = 150.0 // Minimum distance between traffic vehicles in pixels
 	trafficVariation       = 0.2   // 20% random variation on distance
 	trafficSpawnRange      = 3000.0 // Range ahead/behind player to spawn traffic
-	trafficSpawnProbability = 0.15 // Chance to spawn a car for a lane/direction (reduced to help hit speed limits)
+	trafficSpawnProbability = 0.105 // Chance to spawn a car for a lane/direction (30% reduction from 0.15)
 )
 
 // TrafficCar represents a traffic vehicle
@@ -281,7 +281,7 @@ func NewGameplayScreen(selectedCar *car.Car, levelData *LevelData, onGameEnd fun
 		screenHeight: 600,
 		onGameEnd:    onGameEnd,
 		lastSpawnTime: time.Now().UnixMilli(),
-		spawnCooldown: 150 + rand.Int63n(100), // 150-250ms random cooldown between spawn attempts
+		spawnCooldown: 215 + rand.Int63n(143), // 215-358ms random cooldown (30% reduction in spawn frequency)
 		DistanceTravelled: 0,
 		TotalCarsPassed:   0,
 		Level:             1,
