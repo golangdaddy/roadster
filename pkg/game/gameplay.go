@@ -431,9 +431,10 @@ func (gs *GameplayScreen) isLaneClear(laneIdx int, segment RoadSegment, laneWidt
 			// Check longitudinal distance - very lenient for lane 0 (right lane domination)
 			dist := tc.Y - gs.playerCar.Y // Positive = ahead, negative = behind
 
-			// Lane 0 gets special treatment - be more aggressive
-			if laneIdx == 0 {
-				// Only need minimal clearance in lane 0
+			// Rightmost lane gets special treatment - be more aggressive
+			rightmostLane := segment.LaneCount - 1
+			if laneIdx == rightmostLane {
+				// Only need minimal clearance in rightmost lane
 				if dist > -50 && dist < 100 { // 100px ahead, 50px behind
 					return false
 				}
@@ -523,33 +524,34 @@ func (gs *GameplayScreen) updateAutoPilot(currentSegment RoadSegment, segmentIdx
 		}
 	}
 
-	// 3. Lane Change Logic - DOMINATE THE RIGHT LANE (Lane 0)
+	// 3. Lane Change Logic - DOMINATE THE RIGHT LANE (Rightmost lane)
 	// Only change if we aren't already changing (aligned with lane)
 	if math.Abs(gs.playerCar.X-targetLaneX) < 20 {
-		// Primary goal: Stay in lane 0 (right/fast lane) at all costs
+		// Primary goal: Stay in rightmost lane (fast lane) at all costs
+		rightmostLane := currentSegment.LaneCount - 1
 
-		// If we're NOT in lane 0, aggressively try to get back there
-		if gs.autoDriveLane > 0 {
-			if checkAvailability(0) && gs.isLaneClear(0, currentSegment, laneWidth) {
-				gs.autoDriveLane = 0
+		// If we're NOT in the rightmost lane, aggressively try to get back there
+		if gs.autoDriveLane < rightmostLane {
+			if checkAvailability(rightmostLane) && gs.isLaneClear(rightmostLane, currentSegment, laneWidth) {
+				gs.autoDriveLane = rightmostLane
 				laneChanged = true
 			}
 		}
 
-		// Emergency evasion ONLY if in immediate danger and can't stay in lane 0
+		// Emergency evasion ONLY if in immediate danger and can't stay in rightmost lane
 		if !laneChanged && collisionRisk && minDist < 200 {
-			// Only move left (to lane 1) as emergency measure
-			if gs.autoDriveLane == 0 && gs.autoDriveLane < currentSegment.LaneCount-1 &&
-			   checkAvailability(gs.autoDriveLane+1) && gs.isLaneClear(gs.autoDriveLane+1, currentSegment, laneWidth) {
-				gs.autoDriveLane++
+			// Move left (to a slower lane) as emergency measure
+			if gs.autoDriveLane == rightmostLane && gs.autoDriveLane > 0 &&
+			   checkAvailability(gs.autoDriveLane-1) && gs.isLaneClear(gs.autoDriveLane-1, currentSegment, laneWidth) {
+				gs.autoDriveLane--
 				laneChanged = true
 			}
 		}
 
-		// If we're in lane 1 and no longer blocked, immediately return to lane 0
-		if !laneChanged && gs.autoDriveLane == 1 && !collisionRisk {
-			if checkAvailability(0) && gs.isLaneClear(0, currentSegment, laneWidth) {
-				gs.autoDriveLane = 0
+		// If we're in a slow lane and no longer blocked, immediately return to rightmost lane
+		if !laneChanged && gs.autoDriveLane < rightmostLane && !collisionRisk {
+			if checkAvailability(rightmostLane) && gs.isLaneClear(rightmostLane, currentSegment, laneWidth) {
+				gs.autoDriveLane = rightmostLane
 				laneChanged = true
 			}
 		}
@@ -640,20 +642,15 @@ func (gs *GameplayScreen) Update() error {
 
 		// Calculate current lane and speed limit
 		currentLane := gs.getCurrentLane(currentSegment, laneWidth)
-		// Map rendered lane index to character position for speed calculation
-		lanePosition := currentLane
-		if currentLane < len(currentSegment.LanePositions) {
-			lanePosition = currentSegment.LanePositions[currentLane]
-		}
-		speedLimitMPH := 50.0 + float64(lanePosition)*10.0 - 5.0
+		speedLimitMPH := 50.0 + float64(currentLane)*10.0
 		maxSpeed := speedLimitMPH / MPHPerPixelPerFrame
 
 		// Toggle Auto Drive
 		if inpututil.IsKeyJustPressed(ebiten.KeySpace) {
 			gs.autoDrive = !gs.autoDrive
 			if gs.autoDrive {
-				// DOMINATE THE RIGHT LANE: Always start in lane 0
-				gs.autoDriveLane = 0
+				// DOMINATE THE RIGHT LANE: Always start in the rightmost (fastest) lane
+				gs.autoDriveLane = currentSegment.LaneCount - 1
 			}
 		}
 
@@ -1592,7 +1589,7 @@ func (gs *GameplayScreen) getSegmentAt(y float64) RoadSegment {
 }
 
 // getCurrentLane determines which lane the car is currently in
-// Returns the rendered lane index (0, 1, 2...) for consistency with traffic cars
+// Returns the character position in the level file (position 0 = lane 0, even if it's X)
 func (gs *GameplayScreen) getCurrentLane(segment RoadSegment, laneWidth float64) int {
 	// Calculate the left edge of the road segment
 	leftEdge := -float64(segment.StartLaneIndex) * laneWidth
@@ -1610,7 +1607,14 @@ func (gs *GameplayScreen) getCurrentLane(segment RoadSegment, laneWidth float64)
 		renderedLaneIndex = segment.LaneCount - 1
 	}
 
-	return renderedLaneIndex // Return rendered lane index (0, 1, 2...)
+	// Map rendered lane index to character position in level file
+	// This ensures position 0 in the level file is always lane 0, even if it's 'X'
+	if renderedLaneIndex < len(segment.LanePositions) {
+		return segment.LanePositions[renderedLaneIndex]
+	}
+
+	// Fallback: if no mapping exists, return the rendered index (shouldn't happen)
+	return renderedLaneIndex
 }
 
 // checkCollisions checks if the player car collides with any traffic vehicles
@@ -1794,11 +1798,7 @@ func (gs *GameplayScreen) updateTraffic(scrollSpeed float64, currentSegment Road
 				tc.LastLaneChangeTime = time.Now().UnixMilli()
 
 				// Update TargetSpeed for new lane
-				lanePosition := tc.Lane
-				if tc.Lane < len(tcSegment.LanePositions) {
-					lanePosition = tcSegment.LanePositions[tc.Lane]
-				}
-				speedLimitMPH := 50.0 + float64(lanePosition)*10.0 - 5.0
+				speedLimitMPH := 50.0 + float64(tc.Lane)*10.0
 				tc.TargetSpeed = speedLimitMPH / MPHPerPixelPerFrame
 			}
 		}
@@ -1925,17 +1925,9 @@ func (gs *GameplayScreen) spawnTrafficInDirection(segment RoadSegment, laneWidth
 	leftEdge := -float64(segment.StartLaneIndex) * laneWidth
 	laneCenterX := leftEdge + float64(lane)*laneWidth + laneWidth/2
 	
-	// Map rendered lane index to character position in level file
-	// Position 0 in level file is always lane 0, even if it's 'X'
-	lanePosition := lane
-	if lane < len(segment.LanePositions) {
-		lanePosition = segment.LanePositions[lane]
-	}
-	
 	// Determine traffic speed (player speed limit minus 5mph)
 	// Lane 0=50, Lane 1=60, Lane 2=70, etc. (match player steps)
-	// Use character position for speed calculation
-	speedLimitMPH := 50.0 + float64(lanePosition)*10.0 - 5.0
+	speedLimitMPH := 50.0 + float64(lane)*10.0 - 5.0
 	trafficVelocityY := speedLimitMPH / MPHPerPixelPerFrame
 	
 	// Random car colors for variety
@@ -2232,12 +2224,7 @@ func (gs *GameplayScreen) drawSpeedometer(screen *ebiten.Image) {
 	currentSegment, _ := gs.getCurrentRoadSegment()
 	laneWidth := 80.0
 	currentLane := gs.getCurrentLane(currentSegment, laneWidth)
-	// Map rendered lane index to character position for speed calculation
-	lanePosition := currentLane
-	if currentLane < len(currentSegment.LanePositions) {
-		lanePosition = currentSegment.LanePositions[currentLane]
-	}
-	speedLimitMPH := 50.0 + float64(lanePosition)*10.0 - 5.0
+	speedLimitMPH := 50.0 + float64(currentLane)*10.0
 	
 	// Position in top-left corner
 	x := 20.0
