@@ -428,11 +428,20 @@ func (gs *GameplayScreen) isLaneClear(laneIdx int, segment RoadSegment, laneWidt
 	for _, tc := range gs.traffic {
 		// Check lateral overlap (simplified)
 		if math.Abs(tc.X-laneCenterX) < laneWidth/2 {
-			// Check longitudinal distance - more lenient for auto-drive
+			// Check longitudinal distance - very lenient for lane 0 (right lane domination)
 			dist := tc.Y - gs.playerCar.Y // Positive = ahead, negative = behind
-			// Need clearance ahead, but less behind
-			if dist > -100 && dist < 200 { // Only need 200px ahead, 100px behind
-				return false
+
+			// Lane 0 gets special treatment - be more aggressive
+			if laneIdx == 0 {
+				// Only need minimal clearance in lane 0
+				if dist > -50 && dist < 100 { // 100px ahead, 50px behind
+					return false
+				}
+			} else {
+				// Other lanes need more clearance
+				if dist > -100 && dist < 200 { // 200px ahead, 100px behind
+					return false
+				}
 			}
 		}
 	}
@@ -514,56 +523,33 @@ func (gs *GameplayScreen) updateAutoPilot(currentSegment RoadSegment, segmentIdx
 		}
 	}
 
-	// 3. Lane Change Logic - More aggressive, human-like driving
+	// 3. Lane Change Logic - DOMINATE THE RIGHT LANE (Lane 0)
 	// Only change if we aren't already changing (aligned with lane)
 	if math.Abs(gs.playerCar.X-targetLaneX) < 20 {
-		// Always check for overtaking opportunities (being stuck behind slow traffic)
-		shouldChangeLanes := false
-		preferredDirection := 0 // 1=right, -1=left
+		// Primary goal: Stay in lane 0 (right/fast lane) at all costs
 
-		// If we're significantly slower than our target speed, try to overtake
-		currentSpeedMPH := gs.playerCar.VelocityY * MPHPerPixelPerFrame
-		if currentSpeedMPH < maxSpeed*0.8 && collisionRisk {
-			shouldChangeLanes = true
-			// Prefer right lane (faster) for overtaking
-			preferredDirection = 1
-		}
-
-		// Emergency lane change if very close to traffic
-		if collisionRisk && minDist < 300 {
-			shouldChangeLanes = true
-			preferredDirection = 1 // Emergency: go right
-		}
-
-		// Opportunistic lane changes (more frequent than before)
-		if !shouldChangeLanes && rand.Float64() < 0.02 { // 2% chance per frame
-			// Try to move to lane 0 (fastest) if possible
-			if gs.autoDriveLane > 0 && checkAvailability(0) && gs.isLaneClear(0, currentSegment, laneWidth) {
+		// If we're NOT in lane 0, aggressively try to get back there
+		if gs.autoDriveLane > 0 {
+			if checkAvailability(0) && gs.isLaneClear(0, currentSegment, laneWidth) {
 				gs.autoDriveLane = 0
 				laneChanged = true
-			} else if gs.autoDriveLane < currentSegment.LaneCount-1 && checkAvailability(gs.autoDriveLane+1) && gs.isLaneClear(gs.autoDriveLane+1, currentSegment, laneWidth) {
+			}
+		}
+
+		// Emergency evasion ONLY if in immediate danger and can't stay in lane 0
+		if !laneChanged && collisionRisk && minDist < 200 {
+			// Only move left (to lane 1) as emergency measure
+			if gs.autoDriveLane == 0 && gs.autoDriveLane < currentSegment.LaneCount-1 &&
+			   checkAvailability(gs.autoDriveLane+1) && gs.isLaneClear(gs.autoDriveLane+1, currentSegment, laneWidth) {
 				gs.autoDriveLane++
 				laneChanged = true
 			}
 		}
 
-		if shouldChangeLanes {
-			// Check Right first (preferred for overtaking)
-			canRight := gs.autoDriveLane < currentSegment.LaneCount-1 && checkAvailability(gs.autoDriveLane+1) && gs.isLaneClear(gs.autoDriveLane+1, currentSegment, laneWidth)
-			// Check Left (including lane 0 now)
-			canLeft := gs.autoDriveLane > 0 && checkAvailability(gs.autoDriveLane-1) && gs.isLaneClear(gs.autoDriveLane-1, currentSegment, laneWidth)
-
-			if preferredDirection == 1 && canRight {
-				gs.autoDriveLane++
-				laneChanged = true
-			} else if preferredDirection == -1 && canLeft {
-				gs.autoDriveLane--
-				laneChanged = true
-			} else if canRight {
-				gs.autoDriveLane++
-				laneChanged = true
-			} else if canLeft {
-				gs.autoDriveLane--
+		// If we're in lane 1 and no longer blocked, immediately return to lane 0
+		if !laneChanged && gs.autoDriveLane == 1 && !collisionRisk {
+			if checkAvailability(0) && gs.isLaneClear(0, currentSegment, laneWidth) {
+				gs.autoDriveLane = 0
 				laneChanged = true
 			}
 		}
@@ -666,15 +652,8 @@ func (gs *GameplayScreen) Update() error {
 		if inpututil.IsKeyJustPressed(ebiten.KeySpace) {
 			gs.autoDrive = !gs.autoDrive
 			if gs.autoDrive {
-				// Start in lane 0 (fastest lane) for aggressive driving
-				// But check if lane 0 is available first
-				if currentSegment.LaneCount > 0 && gs.isLaneClear(0, currentSegment, laneWidth) {
-					gs.autoDriveLane = 0
-				} else {
-					// Fallback to current lane
-					leftEdge := -float64(currentSegment.StartLaneIndex) * laneWidth
-					gs.autoDriveLane = int((gs.playerCar.X - leftEdge) / laneWidth)
-				}
+				// DOMINATE THE RIGHT LANE: Always start in lane 0
+				gs.autoDriveLane = 0
 			}
 		}
 
