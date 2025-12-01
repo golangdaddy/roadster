@@ -82,11 +82,40 @@ func (game *GameLogic) loadLevel(filename string) (*road.RoadController, *LevelD
 
 	// Reconstruct lines from Layout and Sections
 	reconstructedLines := make([]string, 0)
+	
+	// Import strings for Repeat function if not already imported
+	// Since we can't see imports here, we assume "strings" is needed.
+	
+	lastLaneCount := 0
+	
 	for _, sectionName := range levelDef.Layout {
 		if section, ok := levelDef.Sections[sectionName]; ok {
 			for _, seg := range section.Segments {
+				currentLaneCount := len(seg)
+				
+				// Auto-insert Transition Segment if lane count increases by 1
+				if lastLaneCount > 0 && currentLaneCount == lastLaneCount + 1 {
+					// Create transition segment: previous lanes + "D"
+					// We need to construct a string of 'A's of length lastLaneCount
+					// Since we don't have strings imported in this context snippet, let's do it manually or assume strings is imported.
+					// Given previous file content had "strings" import, it should be safe.
+					// If not, we will fix it.
+					
+					// Construct "AAAA...D"
+					transition := ""
+					for i := 0; i < lastLaneCount; i++ {
+						transition += "A"
+					}
+					transition += "D"
+					
+					// Initialize with "X" + transition to assume empty lane 0
+					reconstructedLines = append(reconstructedLines, "X"+transition)
+				}
+				
 				// Initialize with "X" + segment to assume empty lane 0
 				reconstructedLines = append(reconstructedLines, "X"+seg)
+				
+				lastLaneCount = currentLaneCount
 			}
 		}
 	}
@@ -105,7 +134,15 @@ func (game *GameLogic) loadLevel(filename string) (*road.RoadController, *LevelD
 		// We need to fetch it from the reconstructedLines (stripping the X we just added)
 		originalSegment := reconstructedLines[idx][1:]
 
-		// Start of layby (B)
+		// Auto-insert On-ramp/Off-ramp logic
+		// We need to look at the segment to decide what letters to put where.
+		// Assuming originalSegment defines the main road.
+		
+		// We need to prepend the special characters to the original segment string.
+		// This effectively adds a lane to the left.
+		// e.g. "AAA" -> "BAAA" (Off-ramp)
+		
+		// Start of layby (Off-ramp - B)
 		reconstructedLines[idx] = "B" + originalSegment
 		idx++
 
@@ -118,25 +155,23 @@ func (game *GameLogic) loadLevel(filename string) (*road.RoadController, *LevelD
 			originalSegment = reconstructedLines[idx][1:]
 			
 			// Map service type to character
-			char := "X"
-			if service.Type == road.ServiceTypePetrol {
-				char = "F"
-			}
-			// Could add cases for other service types here (e.g. Food -> ?, Restroom -> ?)
-			// For now, only Petrol is fully implemented in rendering (F)
+			char := "F" // Default to Petrol/Services (F)
+			// TODO: Add mapping for other service types when textures exist
+			// For now we just use F regardless of service.Type
+			_ = service 
 			
 			reconstructedLines[idx] = char + originalSegment
 			idx++
 		}
 
-		// Padding (Empty Layby Lane) - extends layby by 1 segment
+		// Padding (Empty Layby Lane - G) - extends layby by 1 segment
 		if idx < len(reconstructedLines) {
 			originalSegment = reconstructedLines[idx][1:]
 			reconstructedLines[idx] = "G" + originalSegment
 			idx++
 		}
 
-		// End of layby (C)
+		// End of layby (On-ramp - C)
 		if idx < len(reconstructedLines) {
 			originalSegment = reconstructedLines[idx][1:]
 			reconstructedLines[idx] = "C" + originalSegment

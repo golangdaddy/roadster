@@ -27,57 +27,25 @@
   ],
   "sections": {
     "lane1": {
-      "segments": [
-        "A", "A", "A", "A", "A", "A", "A", "A", "A", "A"
-      ]
-    },
-    "lane1_to_2": {
-      "segments": ["AD"]
+      "segments": ["A", "A", "A", "A", "A", "A", "A", "A", "A", "A"]
     },
     "lane2": {
-      "segments": [
-        "AA", "AA", "AA", "AA", "AA", "AA", "AA", "AA", "AA", "AA"
-      ]
-    },
-    "lane2_to_3": {
-      "segments": ["AAD"]
+      "segments": ["AA", "AA", "AA", "AA", "AA", "AA", "AA", "AA", "AA", "AA"]
     },
     "lane3": {
-      "segments": [
-        "AAA", "AAA", "AAA", "AAA", "AAA", "AAA", "AAA", "AAA", "AAA", "AAA"
-      ]
-    },
-    "lane3_to_4": {
-      "segments": ["AAAD"]
+      "segments": ["AAA", "AAA", "AAA", "AAA", "AAA", "AAA", "AAA", "AAA", "AAA", "AAA"]
     },
     "lane4": {
-      "segments": [
-        "AAAA", "AAAA", "AAAA", "AAAA", "AAAA", "AAAA", "AAAA", "AAAA", "AAAA", "AAAA"
-      ]
-    },
-    "lane4_to_5": {
-      "segments": ["AAAAD"]
+      "segments": ["AAAA", "AAAA", "AAAA", "AAAA", "AAAA", "AAAA", "AAAA", "AAAA", "AAAA", "AAAA"]
     },
     "lane5": {
-      "segments": [
-        "AAAAA", "AAAAA", "AAAAA", "AAAAA", "AAAAA", "AAAAA", "AAAAA", "AAAAA", "AAAAA", "AAAAA"
-      ]
-    },
-    "lane5_to_6": {
-      "segments": ["AAAAAD"]
+      "segments": ["AAAAA", "AAAAA", "AAAAA", "AAAAA", "AAAAA", "AAAAA", "AAAAA", "AAAAA", "AAAAA", "AAAAA"]
     },
     "lane6": {
-      "segments": [
-        "AAAAAA", "AAAAAA", "AAAAAA", "AAAAAA", "AAAAAA", "AAAAAA", "AAAAAA", "AAAAAA", "AAAAAA", "AAAAAA"
-      ]
+      "segments": ["AAAAAA"]
     }
   },
   "layout": [
-    "lane1", "lane1_to_2",
-    "lane2", "lane2_to_3",
-    "lane3", "lane3", "lane3", "lane3", "lane3_to_4",
-    "lane4", "lane4", "lane4", "lane4_to_5",
-    "lane5", "lane5", "lane5", "lane5_to_6",
-    "lane6", "lane6", "lane6", "lane6", "lane6", "lane6"
+    "lane1", "lane2", "lane3", "lane4", "lane5", "lane6", 
   ]
 }
