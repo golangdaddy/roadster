@@ -1877,9 +1877,10 @@ func (gs *GameplayScreen) updateTraffic(scrollSpeed float64, currentSegment Road
 			tc.Y = desiredY
 		} else {
 			// If we can't move forward, slow down significantly to prevent pile-ups
-			tc.VelocityY *= 0.7
+			// More aggressive braking to prevent visual overlap
+			tc.VelocityY *= 0.5 // Was 0.7 - brake harder
 			// Apply some movement but much slower
-			tc.Y -= tc.VelocityY * 0.3
+			tc.Y -= tc.VelocityY * 0.2 // Was 0.3
 		}
 
 		// Check if player has passed this car (overtaken)
@@ -2037,12 +2038,42 @@ func (gs *GameplayScreen) spawnTrafficInDirection(segment RoadSegment, laneWidth
 	// Generate a candidate spawn position uniformly in range
 	spawnY := minY + rand.Float64()*(maxY-minY)
 	
-	// Check if the candidate position is safe (maintaining minimum distance)
+	// DENSITY CHECK: Increase minimum distance for faster lanes to prevent overcrowding
+	// Lane 1 (60mph) -> 150px
+	// Lane 2 (70mph) -> 250px
+	// Lane 3+ (80mph+) -> 350px
+	minSpawnDist := minTrafficDistance
+	if lane > 1 {
+		minSpawnDist += 100.0
+	}
+	if lane > 2 {
+		minSpawnDist += 100.0
+	}
+
+	// Check if the candidate position is safe (maintaining density-aware distance)
 	isSafe := true
 	for _, tc := range laneTraffic {
-		if math.Abs(tc.Y - spawnY) < minTrafficDistance {
+		if math.Abs(tc.Y - spawnY) < minSpawnDist {
 			isSafe = false
 			break
+		}
+	}
+	
+	// Additional cluster check: ensure we don't spawn too many cars in a small area across all lanes
+	if isSafe {
+		gs.trafficMutex.RLock()
+		carsInProximity := 0
+		for _, tc := range gs.traffic {
+			if math.Abs(tc.Y - spawnY) < 300.0 {
+				carsInProximity++
+			}
+		}
+		gs.trafficMutex.RUnlock()
+		
+		// If there are already 2 or more cars nearby (in any lane), don't spawn another one
+		// This prevents "walls" of traffic
+		if carsInProximity >= 2 {
+			isSafe = false
 		}
 	}
 	
