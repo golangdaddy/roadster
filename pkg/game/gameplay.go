@@ -450,6 +450,8 @@ type GameplayScreen struct {
 	autoDrive         bool  // Auto-pilot mode
 	autoDriveLane     int   // Target lane for auto-pilot
 	lastAutoDriveLaneChange int64 // Timestamp of last auto-drive lane change
+	Crashes           int   // Total number of crashes
+	lastCrashTime     int64 // Timestamp of last crash (for debounce)
 }
 
 // NewGameplayScreen creates a new gameplay screen
@@ -470,6 +472,8 @@ func NewGameplayScreen(selectedCar *car.Car, levelData *LevelData, onGameEnd fun
 		Level:             1,
 		LevelThreshold:    172, // Start with 172 cars to level up (matches config)
 		PrevLevelThreshold: 0,
+		Crashes:           0,
+		lastCrashTime:     0,
 	}
 
 	// Initialize player car
@@ -1025,7 +1029,24 @@ func (gs *GameplayScreen) Update() error {
 
 	// Check for collisions with traffic
 	if gs.checkCollisions() {
-		gs.resetToStart()
+		// Crash handling
+		now := time.Now().UnixMilli()
+		// Debounce: only count crash every 1 second to prevent rapid incrementing during sustained contact
+		if now - gs.lastCrashTime > 1000 {
+			gs.Crashes++
+			gs.lastCrashTime = now
+			
+			// Game Over check
+			if gs.Crashes >= 10 {
+				if gs.onGameEnd != nil {
+					gs.onGameEnd()
+				}
+			}
+		}
+		
+		// Bounce back effect (simple)
+		gs.playerCar.VelocityY *= -0.5
+		gs.playerCar.VelocityX *= -0.5
 	}
 
 	// Remove segments that have scrolled off screen
@@ -1846,7 +1867,6 @@ func (gs *GameplayScreen) checkCollisions() bool {
 	
 	// Check collision with each traffic vehicle
 	gs.trafficMutex.RLock()
-	defer gs.trafficMutex.RUnlock()
 	for _, tc := range gs.traffic {
 		// Traffic car world X position (using smaller collision box)
 		trafficLeft := tc.X - collisionWidth/2
@@ -1860,10 +1880,12 @@ func (gs *GameplayScreen) checkCollisions() bool {
 		if playerLeft < trafficRight && playerRight > trafficLeft {
 			// Check Y overlap (traffic bounding box overlaps with player collision range)
 			if trafficYTop < playerYBottom && trafficYBottom > playerYTop {
+				gs.trafficMutex.RUnlock()
 				return true // Collision detected
 			}
 		}
 	}
+	gs.trafficMutex.RUnlock()
 	
 	return false
 }
@@ -1895,6 +1917,9 @@ func (gs *GameplayScreen) resetToStart() {
 
 	// Clear all traffic
 	gs.cleanupTraffic()
+	
+	// Reset crash counter
+	gs.Crashes = 0
 
 	// Regenerate road from level data
 	gs.roadSegments = make([]RoadSegment, 0)
@@ -2391,7 +2416,7 @@ func (gs *GameplayScreen) drawUI(screen *ebiten.Image) {
 	// Top right: Stats
 	// Draw background box for stats
 	statsWidth := 180.0
-	statsHeight := 220.0 // Increased height for extra spacing
+	statsHeight := 260.0 // Increased height for crash counter
 	x := float64(gs.screenWidth) - statsWidth - 20.0
 	y := 20.0
 	
@@ -2451,6 +2476,19 @@ func (gs *GameplayScreen) drawUI(screen *ebiten.Image) {
 	
 	levelLabel := fmt.Sprintf("LEVEL %d", gs.Level)
 	gs.drawStatusBar(screen, x, y+spacing*4, barWidth, barHeight, levelProgress, levelLabel, color.RGBA{255, 215, 0, 255}) // Gold
+
+	// Draw Crash Counter
+	crashesText := fmt.Sprintf("CRASHES: %d/10", gs.Crashes)
+	crashOp := &text.DrawOptions{}
+	crashOp.GeoM.Translate(x, y + spacing*5.2)
+	// Red warning color if getting close to 10
+	if gs.Crashes >= 7 {
+		crashOp.ColorScale.ScaleWithColor(color.RGBA{255, 50, 50, 255}) // Red
+	} else {
+		crashOp.ColorScale.ScaleWithColor(color.RGBA{200, 200, 200, 255}) // Grey/White
+	}
+	text.Draw(screen, crashesText, face, crashOp)
+
 	// DEBUG: Traffic Counter
 	gs.trafficMutex.RLock()
 	totalCars := len(gs.traffic)
