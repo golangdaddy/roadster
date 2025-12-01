@@ -10,7 +10,7 @@
     },
     {
       "type": 0,
-      "start_segment": 150,
+      "start_segment": 15,
       "services": [
         { "type": 0, "position": 0 },
         { "type": 0, "position": 0 }
@@ -18,7 +18,7 @@
     },
     {
       "type": 0,
-      "start_segment": 300,
+      "start_segment": 30,
       "services": [
         { "type": 0, "position": 0 },
         { "type": 0, "position": 0 }

@@ -615,35 +615,50 @@ func (gs *GameplayScreen) generateRoadFromLevel(levelData *LevelData) {
 	// 0.5 mile ≈ 19 segments (11400px)
 	for _, station := range gs.petrolStations {
 		// Place 1 mile billboard
-		// Y increases "backwards" (down the screen/earlier in level is HIGHER Y)
-		// But wait. y starts at screenHeight and decreases.
-		// So earlier segments have HIGHER Y.
-		// So "before" the station means Y + Distance.
-		
-		billboard1Y := station.Y + 22800.0
-		billboard05Y := station.Y + 11400.0
-		
-		// Find X position (left side of road)
-		// We need to find the segment at that Y to know where the road edge is
-		seg1 := gs.getSegmentAtY(billboard1Y)
-		leftEdge1 := -float64(seg1.StartLaneIndex) * 80.0
-		
-		seg05 := gs.getSegmentAtY(billboard05Y)
-		leftEdge05 := -float64(seg05.StartLaneIndex) * 80.0
-		
-		gs.billboards = append(gs.billboards, Billboard{
-			X: leftEdge1 - 120, // Left of road
-			Y: billboard1Y,
-			Text: "SERVICES",
-			DistanceText: "1 MILE",
-		})
-		
-		gs.billboards = append(gs.billboards, Billboard{
-			X: leftEdge05 - 120, // Left of road
-			Y: billboard05Y,
-			Text: "SERVICES",
-			DistanceText: "1/2 MILE",
-		})
+		// Y decreases as we go "forward" (player Y decreases)
+		// So "before" the station means lower Y values
+
+		billboard1Y := station.Y - 22800.0
+		billboard05Y := station.Y - 11400.0
+
+		// Only place billboards if they're within the road bounds
+		// Check if the billboard position is within existing segments
+		valid1 := false
+		valid05 := false
+
+		for _, segment := range gs.roadSegments {
+			if billboard1Y <= segment.Y && billboard1Y > segment.Y-600 {
+				valid1 = true
+			}
+			if billboard05Y <= segment.Y && billboard05Y > segment.Y-600 {
+				valid05 = true
+			}
+		}
+
+		if valid1 {
+			// Find X position (left side of road)
+			seg1 := gs.getSegmentAtY(billboard1Y)
+			leftEdge1 := -float64(seg1.StartLaneIndex) * 80.0
+
+			gs.billboards = append(gs.billboards, Billboard{
+				X: leftEdge1 - 120, // Left of road
+				Y: billboard1Y,
+				Text: "SERVICES",
+				DistanceText: "1 MILE",
+			})
+		}
+
+		if valid05 {
+			seg05 := gs.getSegmentAtY(billboard05Y)
+			leftEdge05 := -float64(seg05.StartLaneIndex) * 80.0
+
+			gs.billboards = append(gs.billboards, Billboard{
+				X: leftEdge05 - 120, // Left of road
+				Y: billboard05Y,
+				Text: "SERVICES",
+				DistanceText: "1/2 MILE",
+			})
+		}
 	}
 }
 
