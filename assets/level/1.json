@@ -42,10 +42,10 @@
       "segments": ["AAAAA", "AAAAA", "AAAAA", "AAAAA", "AAAAA", "AAAAA", "AAAAA", "AAAAA", "AAAAA", "AAAAA"]
     },
     "lane6": {
-      "segments": ["AAAAAA"]
+      "segments": ["AAAAAA", "AAAAAA", "AAAAAA", "AAAAAA", "AAAAAA", "AAAAAA", "AAAAAA", "AAAAAA", "AAAAAA", "AAAAAA"]
     }
   },
   "layout": [
-    "lane1", "lane2", "lane3", "lane4", "lane5", "lane6", 
+    "lane1", "lane2", "lane3", "lane4", "lane5", "lane6"
   ]
 }
