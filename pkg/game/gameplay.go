@@ -26,7 +26,7 @@ const MPHPerPixelPerFrame = 9.6
 const (
 	minTrafficDistance     = 150.0 // Minimum distance between traffic vehicles in pixels
 	trafficVariation       = 0.2   // 20% random variation on distance
-	trafficSpawnRange      = 3000.0 // Range ahead/behind player to spawn traffic
+	trafficSpawnRange      = 6000.0 // Range ahead/behind player to spawn traffic (increased from 3000 to prevent jams)
 	trafficSpawnProbability = 0.105 // Chance to spawn a car for a lane/direction (30% reduction from 0.15)
 )
 
@@ -220,21 +220,34 @@ func (tc *TrafficCar) Update(gs *GameplayScreen) {
 		tc.VelocityY = tc.TargetSpeed
 	} else if tc.VelocityY < tc.TargetSpeed {
 		// Accelerate
-		tc.VelocityY += tc.Acceleration
+		// BOOST acceleration if significantly under target speed to reach it faster
+		acceleration := tc.Acceleration
+		if tc.TargetSpeed - tc.VelocityY > 2.0 { // More than ~20mph difference
+			acceleration *= 2.0 // Double acceleration to catch up
+		}
+		
+		tc.VelocityY += acceleration
 		if tc.VelocityY > tc.TargetSpeed {
 			tc.VelocityY = tc.TargetSpeed
 		}
 	} else if tc.VelocityY > tc.TargetSpeed {
 		// Decelerate/Brake
-		// Use Deceleration rate, boost if we need to brake hard (target is much lower)
-		brakeForce := tc.Deceleration
-		if tc.TargetSpeed < tc.VelocityY * 0.5 {
-			brakeForce *= 2.0 // Emergency braking
-		}
 		
-		tc.VelocityY -= brakeForce
-		if tc.VelocityY < tc.TargetSpeed {
-			tc.VelocityY = tc.TargetSpeed
+		// SAFETY CHECK: Don't brake if we are changing lanes to a faster lane
+		// This prevents cars from slowing down right as they enter a fast lane, causing collisions
+		isChangingToFasterLane := tc.LaneProgress > 0 && tc.TargetLane > tc.Lane
+		
+		if !isChangingToFasterLane {
+			// Use Deceleration rate, boost if we need to brake hard (target is much lower)
+			brakeForce := tc.Deceleration
+			if tc.TargetSpeed < tc.VelocityY * 0.5 {
+				brakeForce *= 2.0 // Emergency braking
+			}
+			
+			tc.VelocityY -= brakeForce
+			if tc.VelocityY < tc.TargetSpeed {
+				tc.VelocityY = tc.TargetSpeed
+			}
 		}
 	}
 	
@@ -255,7 +268,8 @@ func (tc *TrafficCar) Update(gs *GameplayScreen) {
 
 	// PRIORITY: Cars driving 20mph+ under lane speed limit should move over
 	currentSpeedMPH := tc.VelocityY * MPHPerPixelPerFrame
-	laneSpeedLimitMPH := 50.0 + float64(lanePosition)*10.0 - 5.0
+	laneSpeedLimitMPH := 50.0 + float64(lanePosition)*10.0
+	// Use the ACTUAL lane speed limit for comparison, not the "-5" target
 	shouldMoveOverSlow := false
 	if currentSpeedMPH < (laneSpeedLimitMPH - 20.0) {
 		shouldMoveOverSlow = true
@@ -1905,6 +1919,16 @@ func (gs *GameplayScreen) updateTraffic(scrollSpeed float64, currentSegment Road
 				tc.LaneProgress = 1.0
 			}
 
+			// PRE-ACCELERATION: If moving to a faster lane (Target > Lane), update target speed early
+			// This prevents slowing down during the merge and causing collisions
+			if tc.TargetLane > tc.Lane {
+				speedLimitMPH := 50.0 + float64(tc.TargetLane)*10.0
+				newTargetSpeed := (speedLimitMPH - 5.0) / MPHPerPixelPerFrame
+				if tc.TargetSpeed < newTargetSpeed {
+					tc.TargetSpeed = newTargetSpeed
+				}
+			}
+
 			// Get traffic segment for accurate lane positioning
 			tcSegment := gs.getSegmentAt(tc.Y)
 
@@ -1928,9 +1952,9 @@ func (gs *GameplayScreen) updateTraffic(scrollSpeed float64, currentSegment Road
 					tc.Lane = 1
 				}
 
-				// Update TargetSpeed for new lane
+				// Update TargetSpeed for new lane (standard update)
 				speedLimitMPH := 50.0 + float64(tc.Lane)*10.0
-				tc.TargetSpeed = speedLimitMPH / MPHPerPixelPerFrame
+				tc.TargetSpeed = (speedLimitMPH - 5.0) / MPHPerPixelPerFrame
 			}
 		}
 
@@ -2025,13 +2049,13 @@ func (gs *GameplayScreen) spawnTrafficInDirection(segment RoadSegment, laneWidth
 	var minY, maxY float64
 	if ahead {
 		// Spawn ahead (above player, lower Y values)
-		// Spawn between 3000px and 800px ahead
+		// Spawn between 6000px and 1500px ahead (increased buffer)
 		minY = playerY - trafficSpawnRange
-		maxY = playerY - 800
+		maxY = playerY - 1500
 	} else {
 		// Spawn behind (below player, higher Y values)
-		// Spawn between 800px and 3000px behind
-		minY = playerY + 800
+		// Spawn between 1500px and 6000px behind
+		minY = playerY + 1500
 		maxY = playerY + trafficSpawnRange
 	}
 	
