@@ -16,6 +16,10 @@ type Car struct {
 	Weight       float64 `json:"weight"`       // in kg
 	FuelCapacity float64 `json:"fuel_capacity"` // in liters
 	FuelLevel    float64 `json:"fuel_level"`    // in liters
+	FoodCapacity float64 `json:"food_capacity"` // 0-100 scale
+	FoodLevel    float64 `json:"food_level"`    // 0-100 scale
+	SleepCapacity float64 `json:"sleep_capacity"` // 0-100 scale
+	SleepLevel    float64 `json:"sleep_level"`    // 0-100 scale
 	Brakes       Brakes  `json:"brakes"`
 }
 
@@ -29,6 +33,10 @@ func NewCar(make, model string, year int, weight float64) *Car {
 		Weight:       weight,
 		FuelCapacity: fuelCapacity,
 		FuelLevel:    fuelCapacity, // Start with full tank
+		FoodCapacity: 100.0,
+		FoodLevel:    100.0,        // Start full
+		SleepCapacity: 100.0,
+		SleepLevel:    100.0,       // Start full
 		Brakes: Brakes{
 			Type:          "Standard",
 			Condition:     0.8,

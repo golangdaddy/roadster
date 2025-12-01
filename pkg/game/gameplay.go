@@ -26,7 +26,7 @@ const MPHPerPixelPerFrame = 9.6
 const (
 	minTrafficDistance     = 150.0 // Minimum distance between traffic vehicles in pixels
 	trafficVariation       = 0.2   // 20% random variation on distance
-	trafficSpawnRange      = 6000.0 // Range ahead/behind player to spawn traffic (increased from 3000 to prevent jams)
+	trafficSpawnRange      = 1600.0 // Range ahead/behind player to spawn traffic (decreased from 6000)
 	trafficSpawnProbability = 0.105 // Chance to spawn a car for a lane/direction (30% reduction from 0.15)
 )
 
@@ -188,24 +188,33 @@ func (tc *TrafficCar) Update(gs *GameplayScreen) {
 	if tc.Lane < len(tcSegment.LanePositions) {
 		lanePosition = tcSegment.LanePositions[tc.Lane]
 	}
-	speedLimitMPH := 50.0 + float64(lanePosition)*10.0 - 5.0
+	speedLimitMPH := 50.0 + float64(lanePosition)*10.0
 	baseTargetSpeed := speedLimitMPH / MPHPerPixelPerFrame
 
 	// Default to base target speed
 	tc.TargetSpeed = baseTargetSpeed
 
+	// Initialize move over flag
+	shouldMoveOver := false
+
 	safeDistance := minTrafficDistance * 1.5
 	if foundCarAhead && minDist < safeDistance {
-		// Match the car ahead, with extra braking if extremely close
+		// Match the car ahead
 		tc.TargetSpeed = speedOfCarAhead
+		
+		// If the car ahead is moving VERY slowly or we are too close, brake harder
 		if minDist < minTrafficDistance {
 			tc.TargetSpeed = speedOfCarAhead * 0.85
 		}
 		if minDist < minTrafficDistance*0.5 {
 			tc.TargetSpeed = speedOfCarAhead * 0.6
 		}
-		if tc.TargetSpeed < 0 {
-			tc.TargetSpeed = 0
+		
+		// AGGRESSIVE OVERTAKING: If stuck behind a slower car, increase urge to change lanes
+		// Especially if we are in a fast lane
+		if tc.Lane > 1 && speedOfCarAhead < baseTargetSpeed * 0.8 {
+			// Force a lane change attempt (ignore random chance)
+			shouldMoveOver = true
 		}
 	}
 
@@ -257,7 +266,7 @@ func (tc *TrafficCar) Update(gs *GameplayScreen) {
 	}
 	
 	// VIGILANT LANE CHANGE: Move out of the way for faster cars approaching from behind
-	shouldMoveOver := false
+	// shouldMoveOver is already initialized above
 	if foundCarBehind && minDistBehind < 400 {
 		// A car is approaching from behind
 		// Check if it's significantly faster (more than 20% faster)
@@ -297,15 +306,30 @@ func (tc *TrafficCar) Update(gs *GameplayScreen) {
 			}
 		}
 
-		// Priority: Move over for faster cars
+		// Priority: Move over for faster cars OR if we want to overtake
 		// But never move to lane 0 - lane 1 is the minimum for traffic
 		if shouldMoveOver {
-			// Move to a slower lane (left) to let faster car pass
-			canLeft := !leftLaneBlocked && tc.Lane > 1
-			if canLeft {
-				tc.TargetLane = tc.Lane - 1
-				tc.LaneProgress = 0.01 // Start transition
-				return
+			// If we are the slow one blocking, move left
+			// If we are stuck behind a slow one, move right (overtake)
+			
+			// Overtake logic (Move Right)
+			if foundCarAhead && tc.Lane+1 < segment.LaneCount {
+				canRight := !rightLaneBlocked
+				if canRight {
+					tc.TargetLane = tc.Lane + 1
+					tc.LaneProgress = 0.01
+					return
+				}
+			}
+			
+			// Move over logic (Move Left) - only if we aren't trying to overtake
+			if !foundCarAhead && tc.Lane > 1 {
+				canLeft := !leftLaneBlocked
+				if canLeft {
+					tc.TargetLane = tc.Lane - 1
+					tc.LaneProgress = 0.01 // Start transition
+					return
+				}
 			}
 		}
 
@@ -2049,13 +2073,13 @@ func (gs *GameplayScreen) spawnTrafficInDirection(segment RoadSegment, laneWidth
 	var minY, maxY float64
 	if ahead {
 		// Spawn ahead (above player, lower Y values)
-		// Spawn between 6000px and 1500px ahead (increased buffer)
+		// Spawn between 1600px and 800px ahead (adjusted for reduced range)
 		minY = playerY - trafficSpawnRange
-		maxY = playerY - 1500
+		maxY = playerY - 800
 	} else {
 		// Spawn behind (below player, higher Y values)
-		// Spawn between 1500px and 6000px behind
-		minY = playerY + 1500
+		// Spawn between 800px and 1600px behind
+		minY = playerY + 800
 		maxY = playerY + trafficSpawnRange
 	}
 	
@@ -2296,51 +2320,72 @@ func (gs *GameplayScreen) drawTraffic(screen *ebiten.Image) {
 
 // drawUI renders the game UI overlay
 func (gs *GameplayScreen) drawUI(screen *ebiten.Image) {
-	// Draw speedometer
+	// Top left: Speedometer
 	gs.drawSpeedometer(screen)
 
-	// Draw miles and fuel using bitmap font
+	// Top right: Stats
+	// Draw background box for stats
+	statsWidth := 180.0
+	statsHeight := 220.0 // Increased height for extra spacing
+	x := float64(gs.screenWidth) - statsWidth - 20.0
+	y := 20.0
+	
+	bgImg := ebiten.NewImage(int(statsWidth), int(statsHeight))
+	bgImg.Fill(color.RGBA{20, 20, 30, 200})
+	
+	// Draw border
+	borderColor := color.RGBA{100, 100, 120, 255}
+	w, h := int(statsWidth), int(statsHeight)
+	for i := 0; i < w; i++ {
+		bgImg.Set(i, 0, borderColor)
+		bgImg.Set(i, h-1, borderColor)
+	}
+	for i := 0; i < h; i++ {
+		bgImg.Set(0, i, borderColor)
+		bgImg.Set(w-1, i, borderColor)
+	}
+	
+	op := &ebiten.DrawImageOptions{}
+	op.GeoM.Translate(x, y)
+	screen.DrawImage(bgImg, op)
+
+	// Padding inside box
+	x += 15.0
+	y += 15.0
+
 	face := text.NewGoXFace(bitmapfont.Face)
 	
-	milesText := fmt.Sprintf("MILES: %.1f", gs.DistanceTravelled)
-	fuelPercent := gs.playerCar.SelectedCar.FuelLevel / gs.playerCar.SelectedCar.FuelCapacity * 100
-	fuelText := fmt.Sprintf("FUEL: %.0f%%", fuelPercent)
-	
-	// Position at top right
-	x := float64(gs.screenWidth) - 150
-	y := 30.0
-	
 	// Draw Miles
+	milesText := fmt.Sprintf("MILES: %.1f", gs.DistanceTravelled)
 	textOp := &text.DrawOptions{}
 	textOp.GeoM.Translate(x, y)
 	textOp.ColorScale.ScaleWithColor(color.White)
 	text.Draw(screen, milesText, face, textOp)
 	
-	// Draw Fuel
-	textOp.GeoM.Translate(0, 25) // Move down
-	if fuelPercent < 20 {
-		textOp.ColorScale.ScaleWithColor(color.RGBA{255, 50, 50, 255}) // Red low fuel warning
-	} else {
-		textOp.ColorScale.ScaleWithColor(color.White)
-	}
-	text.Draw(screen, fuelText, face, textOp)
+	// Draw Status Bars (Fuel, Food, Sleep)
+	barWidth := 150.0
+	barHeight := 12.0
+	spacing := 40.0 // Increased spacing (was 25.0)
 	
-	// Draw Level
-	levelText := fmt.Sprintf("LVL %d (%d/%d)", gs.Level, gs.TotalCarsPassed, gs.LevelThreshold)
+	// Fuel
+	fuelPercent := gs.playerCar.SelectedCar.FuelLevel / gs.playerCar.SelectedCar.FuelCapacity
+	gs.drawStatusBar(screen, x, y+spacing, barWidth, barHeight, fuelPercent, "FUEL", color.RGBA{255, 165, 0, 255}) // Orange
 	
-	levelOp := &text.DrawOptions{}
-	levelOp.GeoM.Translate(x, y + 50)
-	levelOp.ColorScale.ScaleWithColor(color.RGBA{255, 215, 0, 255}) // Gold
-	text.Draw(screen, levelText, face, levelOp)
-
-	// Draw Auto Pilot Indicator
-	if gs.autoDrive {
-		autoText := "AUTO PILOT"
-		autoOp := &text.DrawOptions{}
-		autoOp.GeoM.Translate(float64(gs.screenWidth)/2-50, 30)
-		autoOp.ColorScale.ScaleWithColor(color.RGBA{0, 255, 255, 255}) // Cyan
-		text.Draw(screen, autoText, face, autoOp)
-	}
+	// Food
+	foodPercent := gs.playerCar.SelectedCar.FoodLevel / gs.playerCar.SelectedCar.FoodCapacity
+	gs.drawStatusBar(screen, x, y+spacing*2, barWidth, barHeight, foodPercent, "FOOD", color.RGBA{0, 255, 0, 255}) // Green
+	
+	// Sleep
+	sleepPercent := gs.playerCar.SelectedCar.SleepLevel / gs.playerCar.SelectedCar.SleepCapacity
+	gs.drawStatusBar(screen, x, y+spacing*3, barWidth, barHeight, sleepPercent, "SLEEP", color.RGBA{50, 150, 255, 255}) // Blue
+	
+	// Level Progress Bar
+	levelProgress := float64(gs.TotalCarsPassed - gs.PrevLevelThreshold) / float64(gs.LevelThreshold - gs.PrevLevelThreshold)
+	if levelProgress < 0 { levelProgress = 0 }
+	if levelProgress > 1 { levelProgress = 1 }
+	
+	levelLabel := fmt.Sprintf("LEVEL %d", gs.Level)
+	gs.drawStatusBar(screen, x, y+spacing*4, barWidth, barHeight, levelProgress, levelLabel, color.RGBA{255, 215, 0, 255}) // Gold
 }
 
 func (gs *GameplayScreen) drawPetrolStationTarmac(screen *ebiten.Image) {
@@ -2420,7 +2465,7 @@ func (gs *GameplayScreen) drawSpeedometer(screen *ebiten.Image) {
 	x := 20.0
 	y := 20.0
 	width := 180.0
-	height := 140.0 // Increased height to fit speed limit display
+	height := 160.0 // Increased height for spacing (was 140.0)
 	
 	// Draw speedometer background (semi-transparent dark box)
 	bgImg := ebiten.NewImage(int(width), int(height))
@@ -2459,7 +2504,7 @@ func (gs *GameplayScreen) drawSpeedometer(screen *ebiten.Image) {
 	textScale := 3.0
 	textWidth := text.Advance(speedText, face) * textScale
 	textX := x + width/2 - textWidth/2
-	textY := y + 50.0
+	textY := y + 40.0 // Moved up slightly (was 50)
 	
 	textOp := &text.DrawOptions{}
 	textOp.GeoM.Scale(textScale, textScale)
@@ -2482,7 +2527,7 @@ func (gs *GameplayScreen) drawSpeedometer(screen *ebiten.Image) {
 	labelScale := 1.5
 	labelWidth := text.Advance(labelText, face) * labelScale
 	labelX := x + width/2 - labelWidth/2
-	labelY := y + 85.0
+	labelY := y + 75.0 // Moved up (was 85)
 	
 	labelOp := &text.DrawOptions{}
 	labelOp.GeoM.Scale(labelScale, labelScale)
@@ -2495,7 +2540,7 @@ func (gs *GameplayScreen) drawSpeedometer(screen *ebiten.Image) {
 	limitScale := 1.0
 	limitWidth := text.Advance(limitText, face) * limitScale
 	limitX := x + width/2 - limitWidth/2
-	limitY := y + 105.0
+	limitY := y + 100.0 // Moved up slightly (was 105)
 	
 	limitOp := &text.DrawOptions{}
 	limitOp.GeoM.Scale(limitScale, limitScale)
@@ -2510,7 +2555,7 @@ func (gs *GameplayScreen) drawSpeedometer(screen *ebiten.Image) {
 	text.Draw(screen, limitText, face, limitOp)
 	
 	// Draw simple speed gauge bar
-	gs.drawSpeedGauge(screen, x+10, y+height-25, width-20, 15, speedMPH, speedLimitMPH)
+	gs.drawSpeedGauge(screen, x+10, y+height-30, width-20, 15, speedMPH, speedLimitMPH)
 }
 
 // drawSpeedGauge draws a simple horizontal gauge bar showing speed
@@ -2582,6 +2627,55 @@ func (gs *GameplayScreen) drawSpeedGauge(screen *ebiten.Image, x, y, width, heig
 		limitOp := &ebiten.DrawImageOptions{}
 		limitOp.GeoM.Translate(limitXPos-1, y)
 		screen.DrawImage(limitLine, limitOp)
+	}
+}
+
+// drawStatusBar draws a labeled status bar with percentage fill
+func (gs *GameplayScreen) drawStatusBar(screen *ebiten.Image, x, y, width, height float64, percent float64, label string, barColor color.RGBA) {
+	// Draw label
+	face := text.NewGoXFace(bitmapfont.Face)
+	labelOp := &text.DrawOptions{}
+	labelOp.GeoM.Translate(x, y-14) // Above bar (Moved up for clearance)
+	labelOp.ColorScale.ScaleWithColor(color.White)
+	text.Draw(screen, label, face, labelOp)
+
+	// Draw background (dark gray)
+	bgBar := ebiten.NewImage(int(width), int(height))
+	bgBar.Fill(color.RGBA{40, 40, 40, 200})
+	
+	// Draw border
+	borderColor := color.RGBA{100, 100, 100, 255}
+	w, h := int(width), int(height)
+	for i := 0; i < w; i++ {
+		bgBar.Set(i, 0, borderColor)
+		bgBar.Set(i, h-1, borderColor)
+	}
+	for i := 0; i < h; i++ {
+		bgBar.Set(0, i, borderColor)
+		bgBar.Set(w-1, i, borderColor)
+	}
+	
+	bgOp := &ebiten.DrawImageOptions{}
+	bgOp.GeoM.Translate(x, y)
+	screen.DrawImage(bgBar, bgOp)
+	
+	// Draw filled portion
+	if percent > 1.0 { percent = 1.0 }
+	if percent < 0.0 { percent = 0.0 }
+	
+	filledWidth := int(width * percent)
+	if filledWidth > 0 {
+		filledBar := ebiten.NewImage(filledWidth, int(height))
+		filledBar.Fill(barColor)
+		
+		// Warning color (red) if low
+		if percent < 0.2 {
+			filledBar.Fill(color.RGBA{255, 50, 50, 255})
+		}
+		
+		fillOp := &ebiten.DrawImageOptions{}
+		fillOp.GeoM.Translate(x, y)
+		screen.DrawImage(filledBar, fillOp)
 	}
 }
 
