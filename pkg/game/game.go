@@ -115,6 +115,12 @@ func (game *GameLogic) loadLevel(filename string) (*road.RoadController, *LevelD
 			idx++
 		}
 
+		// Padding (Empty Layby Lane) - extends layby by 1 segment
+		if idx < len(reconstructedLines) {
+			reconstructedLines[idx] = "G" + levelDef.Segments[idx]
+			idx++
+		}
+
 		// End of layby (C)
 		if idx < len(reconstructedLines) {
 			reconstructedLines[idx] = "C" + levelDef.Segments[idx]
