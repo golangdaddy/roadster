@@ -4,7 +4,6 @@
       "type": 0,
       "start_segment": 3,
       "services": [
-        { "type": 0, "position": 0 },
         { "type": 0, "position": 0 }
       ]
     },
@@ -46,6 +45,6 @@
     }
   },
   "layout": [
-    "lane1", "lane2", "lane3", "lane4", "lane5", "lane6"
+    "lane1", "lane2", "lane3", "lane4", "lane5", "lane6", "lane6", "lane5", "lane4", "lane3", "lane2", "lane1"
   ]
 }
