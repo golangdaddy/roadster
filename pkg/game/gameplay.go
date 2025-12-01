@@ -342,6 +342,16 @@ func (tc *TrafficCar) Update(gs *GameplayScreen) {
 			
 			if !laneExists {
 				// Lane ends! Must merge immediately.
+				
+				// OFFSCREEN CHECK: If car is significantly offscreen (behind or far ahead), just destroy it
+				// This saves processing and avoids glitches with cars stuck in void
+				distFromPlayer := tc.Y - gs.playerCar.Y
+				if math.Abs(distFromPlayer) > 800 { // 800px is roughly screen height + buffer
+					// Mark for deletion (we can't delete from slice here easily, so we'll move it to infinity)
+					tc.Y = 1000000 // Move to far off place, will be cleaned up next frame by bounds check or regular cleanup
+					return
+				}
+
 				// Decide which way to merge based on where the road went
 				currentTime := time.Now().UnixMilli()
 				

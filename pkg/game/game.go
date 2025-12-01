@@ -118,22 +118,30 @@ func (game *GameLogic) loadLevel(filename string) (*road.RoadController, *LevelD
 				currentLaneCount := len(seg)
 				
 				// Auto-insert Transition Segment if lane count increases by 1
-				if lastLaneCount > 0 && currentLaneCount == lastLaneCount + 1 {
-					// Create transition segment: previous lanes + "D"
-					// We need to construct a string of 'A's of length lastLaneCount
-					// Since we don't have strings imported in this context snippet, let's do it manually or assume strings is imported.
-					// Given previous file content had "strings" import, it should be safe.
-					// If not, we will fix it.
-					
-					// Construct "AAAA...D"
-					transition := ""
-					for i := 0; i < lastLaneCount; i++ {
-						transition += "A"
+				if lastLaneCount > 0 {
+					if currentLaneCount == lastLaneCount + 1 {
+						// LANE INCREASES (On-ramp D)
+						// Create transition segment: previous lanes + "D"
+						transition := ""
+						for i := 0; i < lastLaneCount; i++ {
+							transition += "A"
+						}
+						transition += "D"
+						
+						// Initialize with "X" + transition to assume empty lane 0
+						reconstructedLines = append(reconstructedLines, "X"+transition)
+					} else if currentLaneCount == lastLaneCount - 1 {
+						// LANE DECREASES (Off-ramp E)
+						// Create transition segment: current lanes + "E"
+						// "E" represents the lane that is ending (merging left)
+						transition := ""
+						for i := 0; i < currentLaneCount; i++ {
+							transition += "A"
+						}
+						transition += "E"
+						
+						reconstructedLines = append(reconstructedLines, "X"+transition)
 					}
-					transition += "D"
-					
-					// Initialize with "X" + transition to assume empty lane 0
-					reconstructedLines = append(reconstructedLines, "X"+transition)
 				}
 				
 				// Initialize with "X" + segment to assume empty lane 0
