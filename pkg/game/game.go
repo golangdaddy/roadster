@@ -1,11 +1,10 @@
 package game
 
 import (
-	"bufio"
+	"encoding/json"
 	"log"
 	"os"
 	"path/filepath"
-	"strings"
 
 	"github.com/golangdaddy/roadster/pkg/models"
 	"github.com/golangdaddy/roadster/pkg/models/car"
@@ -29,7 +28,7 @@ func (g *GameLogic) LevelData() []*LevelData {
 
 func (game *GameLogic) LoadLevels() error {
 	// Find all level files
-	levelFiles, err := filepath.Glob("assets/level/*.level")
+	levelFiles, err := filepath.Glob("assets/level/*.json")
 	if err != nil {
 		return err
 	}
@@ -75,9 +74,55 @@ func (game *GameLogic) loadLevel(filename string) (*road.RoadController, *LevelD
 		Segments: make([]RoadSegment, 0),
 	}
 
-	scanner := bufio.NewScanner(file)
-	for scanner.Scan() {
-		line := strings.TrimSpace(scanner.Text())
+	// Parse JSON level definition
+	var levelDef road.LevelDefinition
+	if err := json.NewDecoder(file).Decode(&levelDef); err != nil {
+		return nil, nil, err
+	}
+
+	// Reconstruct lines from Segments and Laybys
+	// Initialize with "X" + segment to assume empty lane 0
+	reconstructedLines := make([]string, len(levelDef.Segments))
+	for i, seg := range levelDef.Segments {
+		reconstructedLines[i] = "X" + seg
+	}
+
+	// Apply Laybys
+	for _, layby := range levelDef.Laybys {
+		idx := layby.StartSegment
+		if idx >= len(reconstructedLines) {
+			continue
+		}
+
+		// Start of layby (B)
+		reconstructedLines[idx] = "B" + levelDef.Segments[idx]
+		idx++
+
+		// Services
+		for _, service := range layby.Services {
+			if idx >= len(reconstructedLines) {
+				break
+			}
+			// Map service type to character
+			char := "X"
+			if service.Type == road.ServiceTypePetrol {
+				char = "F"
+			}
+			// Could add cases for other service types here (e.g. Food -> ?, Restroom -> ?)
+			// For now, only Petrol is fully implemented in rendering (F)
+			
+			reconstructedLines[idx] = char + levelDef.Segments[idx]
+			idx++
+		}
+
+		// End of layby (C)
+		if idx < len(reconstructedLines) {
+			reconstructedLines[idx] = "C" + levelDef.Segments[idx]
+		}
+	}
+
+	// Process reconstructed lines using existing logic
+	for _, line := range reconstructedLines {
 		if line == "" {
 			continue
 		}
@@ -132,10 +177,6 @@ func (game *GameLogic) loadLevel(filename string) (*road.RoadController, *LevelD
 			StartLaneIndex: startLaneIndex,
 		}
 		levelData.Segments = append(levelData.Segments, segment)
-	}
-
-	if err := scanner.Err(); err != nil {
-		return nil, nil, err
 	}
 
 	return roadController, levelData, nil
