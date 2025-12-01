@@ -313,6 +313,60 @@ func (tc *TrafficCar) Update(gs *GameplayScreen) {
 		shouldMoveOverSlow = true
 	}
 
+	// LANE MERGE LOGIC
+	// Check if our current lane is ending in the next segment (merging)
+	// This is a critical check to prevent driving on grass/off-road
+	
+	// Only check if not already changing lanes
+	if tc.LaneProgress == 0 && tc.TargetLane == 0 {
+		// Look ahead distance (based on speed, but at least 800px)
+		lookAheadDist := tc.VelocityY * 60.0 // ~1 second ahead
+		if lookAheadDist < 800 {
+			lookAheadDist = 800
+		}
+		
+		// Check the segment ahead
+		nextY := tc.Y - lookAheadDist
+		currentSegment := gs.getSegmentAt(tc.Y)
+		nextSegment := gs.getSegmentAt(nextY)
+		
+		// If segments are different, check lane validity
+		if currentSegment.Y != nextSegment.Y {
+			// Calculate effective lane index in next segment
+			currentAbsLane := tc.Lane + currentSegment.StartLaneIndex
+			nextStartLaneIdx := nextSegment.StartLaneIndex
+			nextEndLaneIdx := nextStartLaneIdx + nextSegment.LaneCount - 1
+			
+			// Check if our lane exists in the next segment
+			laneExists := currentAbsLane >= nextStartLaneIdx && currentAbsLane <= nextEndLaneIdx
+			
+			if !laneExists {
+				// Lane ends! Must merge immediately.
+				// Decide which way to merge based on where the road went
+				currentTime := time.Now().UnixMilli()
+				
+				// If we are to the LEFT of the new start (road moved right) -> Merge Right
+				if currentAbsLane < nextStartLaneIdx {
+					// Force merge right
+					// Check if right lane is physically possible (it should be if we are merging into it)
+					tc.TargetLane = tc.Lane + 1
+					tc.LaneProgress = 0.01
+					tc.LastLaneChangeTime = currentTime // Reset cooldown
+					return
+				}
+				
+				// If we are to the RIGHT of the new end (road moved left) -> Merge Left
+				if currentAbsLane > nextEndLaneIdx {
+					// Force merge left
+					tc.TargetLane = tc.Lane - 1
+					tc.LaneProgress = 0.01
+					tc.LastLaneChangeTime = currentTime // Reset cooldown
+					return
+				}
+			}
+		}
+	}
+
 	// Attempt lane change
 	if tc.LaneProgress == 0 && tc.TargetLane == 0 {
 		// Cooldown check (10 seconds)
@@ -735,6 +789,47 @@ func (gs *GameplayScreen) updateAutoPilot(currentSegment RoadSegment, segmentIdx
 
 		boundRight = boundRight + (nextRight-boundRight)*progress
 		boundLeft = boundLeft + (nextLeft-boundLeft)*progress
+		
+		// PREDICTIVE LANE CHECK:
+		// If the current lane will not exist in the next segment (lane count decreasing),
+		// or if we need to move into a new lane (on-ramp), we need to act early.
+		// Look ahead at 50% progress to trigger early lane change.
+		if progress > 0.5 {
+			// Check if our current lane index is valid in the NEXT segment
+			// We need to map current lane index to absolute position, then to next segment index
+			// Simplified: Just check relative indices if alignment is standard
+			
+			// Case 1: Lane Ending (Merging Left or Right)
+			// If we are in the rightmost lane, and next segment has fewer lanes
+			// Assuming standard right-lane merge for now, or relying on bounds check
+			// The bounds check above handles "running out of road", but it's reactive.
+			
+			// Proactive Check:
+			// If next segment start index > current segment start index, left lane is disappearing?
+			// If next segment lane count < current, a lane is disappearing.
+			
+			// Check if our target lane is valid in next segment
+			nextStartLaneIdx := nextSegment.StartLaneIndex
+			currentStartLaneIdx := currentSegment.StartLaneIndex
+			
+			// Calculate effective lane index in next segment
+			// Absolute Lane Index = Relative Index + Start Index
+			currentAbsLane := gs.autoDriveLane + currentStartLaneIdx
+			
+			// Check if this absolute lane exists in next segment
+			// Next segment has lanes from nextStartLaneIdx to nextStartLaneIdx + nextLaneCount
+			if currentAbsLane < nextStartLaneIdx {
+				// Lane ends on the left (road shifts right) - Force move Right
+				gs.autoDriveLane++
+				laneChanged = true
+				gs.lastAutoDriveLaneChange = time.Now().UnixMilli() // Reset cooldown to allow chain moves
+			} else if currentAbsLane >= nextStartLaneIdx + nextSegment.LaneCount {
+				// Lane ends on the right (road shifts left) - Force move Left
+				gs.autoDriveLane--
+				laneChanged = true
+				gs.lastAutoDriveLaneChange = time.Now().UnixMilli()
+			}
+		}
 	}
 
 	targetLaneX := startLeftEdge + float64(gs.autoDriveLane)*laneWidth + laneWidth/2
