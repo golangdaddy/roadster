@@ -8,6 +8,7 @@ import (
 
 	"github.com/golangdaddy/roadster/pkg/models"
 	"github.com/golangdaddy/roadster/pkg/models/car"
+	"github.com/golangdaddy/roadster/pkg/models/profile"
 	"github.com/golangdaddy/roadster/pkg/road"
 	"github.com/golangdaddy/roadster/pkg/ui"
 	"github.com/hajimehoshi/ebiten/v2"
@@ -16,6 +17,10 @@ import (
 type GameLogic struct {
 	levels    []*road.RoadController
 	levelData []*LevelData
+	
+	// Profile Management
+	profiles       []*profile.PlayerProfile
+	currentProfile *profile.PlayerProfile
 }
 
 func (g *GameLogic) Levels() []*road.RoadController {
@@ -24,6 +29,25 @@ func (g *GameLogic) Levels() []*road.RoadController {
 
 func (g *GameLogic) LevelData() []*LevelData {
 	return g.levelData
+}
+
+func (g *GameLogic) SetCurrentProfile(p *profile.PlayerProfile) {
+	g.currentProfile = p
+	// Add to list if new
+	exists := false
+	for _, existing := range g.profiles {
+		if existing.ID == p.ID {
+			exists = true
+			break
+		}
+	}
+	if !exists {
+		g.profiles = append(g.profiles, p)
+	}
+}
+
+func (g *GameLogic) CurrentProfile() *profile.PlayerProfile {
+	return g.currentProfile
 }
 
 func (game *GameLogic) LoadLevels() error {
@@ -254,17 +278,29 @@ type Screen interface {
 // NewGame creates a new game instance
 func NewGame() *Game {
 	game := &Game{
-		gameLogic: &GameLogic{},
+		gameLogic: &GameLogic{
+			profiles: make([]*profile.PlayerProfile, 0),
+		},
 	}
 
 	// Initialize with title screen
 	game.currentScreen = ui.NewTitleScreen(func() {
-		// Transition to loading screen
-		game.currentScreen = ui.NewLoadingScreen(func(gameState *models.GameState) {
-			// Transition to garage screen
-			game.currentScreen = ui.NewGarageScreen(func(selectedCar *car.Car) {
-				// Start the actual game with selected car
-				game.startGameplay(selectedCar)
+		// Transition to Character Selection Screen (New Game)
+		// TODO: Add Load Game screen later for multi-tenancy
+		game.currentScreen = ui.NewCharacterSelectionScreen(func(p *profile.PlayerProfile) {
+			// Profile created!
+			game.gameLogic.SetCurrentProfile(p)
+			
+			// Transition to loading screen
+			game.currentScreen = ui.NewLoadingScreen(func(gameState *models.GameState) {
+				// Transition to garage screen
+				game.currentScreen = ui.NewGarageScreen(func(selectedCar *car.Car) {
+					// Update profile with selected car
+					game.gameLogic.CurrentProfile().CurrentCar = selectedCar
+					
+					// Start the actual game with selected car
+					game.startGameplay(selectedCar)
+				})
 			})
 		})
 	})

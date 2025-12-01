@@ -461,6 +461,8 @@ type GameplayScreen struct {
 	lastCrashTime     int64   // Timestamp of last crash (for debounce)
 	SleepCapacity     float64 // Player sleep capacity (0-100 scale)
 	SleepLevel        float64 // Player sleep level (0-100 scale)
+	FoodCapacity      float64 // Player food capacity (0-100 scale)
+	FoodLevel         float64 // Player food level (0-100 scale)
 	ToiletLevel       float64 // How full the player's bladder is (0-100 scale)
 }
 
@@ -487,6 +489,8 @@ func NewGameplayScreen(selectedCar *car.Car, levelData *LevelData, onGameEnd fun
 		lastCrashTime:     0,
 		SleepCapacity:     100.0,
 		SleepLevel:        100.0, // Start well-rested
+		FoodCapacity:      100.0,
+		FoodLevel:         100.0, // Start full
 		ToiletLevel:       0.0,   // Start with empty bladder
 	}
 
@@ -1093,6 +1097,15 @@ func (gs *GameplayScreen) Update() error {
 		gs.SleepLevel -= sleepBurn
 		if gs.SleepLevel < 0 {
 			gs.SleepLevel = 0
+		}
+	}
+
+	// Consume food
+	foodBurn := 0.00015 + gs.playerCar.VelocityY * 0.00008
+	if gs.FoodLevel > 0 {
+		gs.FoodLevel -= foodBurn
+		if gs.FoodLevel < 0 {
+			gs.FoodLevel = 0
 		}
 	}
 
@@ -2020,6 +2033,7 @@ func (gs *GameplayScreen) resetToStart() {
 
 	// Reset player stats
 	gs.SleepLevel = 100.0
+	gs.FoodLevel = 100.0
 	gs.ToiletLevel = 0.0
 
 	// Regenerate road from level data
@@ -2563,7 +2577,7 @@ func (gs *GameplayScreen) drawUI(screen *ebiten.Image) {
 	gs.drawStatusBar(screen, x, y+spacing, barWidth, barHeight, fuelPercent, "FUEL", color.RGBA{255, 165, 0, 255}) // Orange
 	
 	// Food
-	foodPercent := gs.playerCar.SelectedCar.FoodLevel / gs.playerCar.SelectedCar.FoodCapacity
+	foodPercent := gs.FoodLevel / gs.FoodCapacity
 	gs.drawStatusBar(screen, x, y+spacing*2, barWidth, barHeight, foodPercent, "FOOD", color.RGBA{0, 255, 0, 255}) // Green
 
 	// Sleep (now player stat, not car stat)
