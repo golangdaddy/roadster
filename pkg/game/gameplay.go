@@ -457,8 +457,11 @@ type GameplayScreen struct {
 	autoDrive         bool  // Auto-pilot mode
 	autoDriveLane     int   // Target lane for auto-pilot
 	lastAutoDriveLaneChange int64 // Timestamp of last auto-drive lane change
-	Crashes           int   // Total number of crashes
-	lastCrashTime     int64 // Timestamp of last crash (for debounce)
+	Crashes           int     // Total number of crashes
+	lastCrashTime     int64   // Timestamp of last crash (for debounce)
+	SleepCapacity     float64 // Player sleep capacity (0-100 scale)
+	SleepLevel        float64 // Player sleep level (0-100 scale)
+	ToiletLevel       float64 // How full the player's bladder is (0-100 scale)
 }
 
 // NewGameplayScreen creates a new gameplay screen
@@ -482,6 +485,9 @@ func NewGameplayScreen(selectedCar *car.Car, levelData *LevelData, onGameEnd fun
 		PrevLevelThreshold: 0,
 		Crashes:           0,
 		lastCrashTime:     0,
+		SleepCapacity:     100.0,
+		SleepLevel:        100.0, // Start well-rested
+		ToiletLevel:       0.0,   // Start with empty bladder
 	}
 
 	// Initialize player car
@@ -1081,6 +1087,22 @@ func (gs *GameplayScreen) Update() error {
 		}
 	}
 
+	// Consume sleep (slower than fuel)
+	sleepBurn := 0.0001 + gs.playerCar.VelocityY * 0.00005
+	if gs.SleepLevel > 0 {
+		gs.SleepLevel -= sleepBurn
+		if gs.SleepLevel < 0 {
+			gs.SleepLevel = 0
+		}
+	}
+
+	// Fill toilet (bladder fills up over time)
+	toiletFill := 0.0003 + gs.playerCar.VelocityY * 0.0001
+	gs.ToiletLevel += toiletFill
+	if gs.ToiletLevel > 100.0 {
+		gs.ToiletLevel = 100.0
+	}
+
 	// Scroll the road (move road downward to create forward movement illusion)
 	scrollSpeed := gs.playerCar.VelocityY
 	
@@ -1140,10 +1162,19 @@ func (gs *GameplayScreen) Update() error {
 		for _, station := range gs.petrolStations {
 			dist := math.Hypot(gs.playerCar.X-station.X, gs.playerCar.Y-station.Y)
 			if dist < 80 {
+				// Refuel
 				if gs.playerCar.SelectedCar.FuelLevel < gs.playerCar.SelectedCar.FuelCapacity {
 					gs.playerCar.SelectedCar.FuelLevel += 0.5
 					if gs.playerCar.SelectedCar.FuelLevel > gs.playerCar.SelectedCar.FuelCapacity {
 						gs.playerCar.SelectedCar.FuelLevel = gs.playerCar.SelectedCar.FuelCapacity
+					}
+				}
+
+				// Use restroom (relieve toilet level)
+				if gs.ToiletLevel > 0 {
+					gs.ToiletLevel -= 50.0 // Significant relief
+					if gs.ToiletLevel < 0 {
+						gs.ToiletLevel = 0
 					}
 				}
 			}
@@ -1987,6 +2018,10 @@ func (gs *GameplayScreen) resetToStart() {
 	// Reset crash counter
 	gs.Crashes = 0
 
+	// Reset player stats
+	gs.SleepLevel = 100.0
+	gs.ToiletLevel = 0.0
+
 	// Regenerate road from level data
 	gs.roadSegments = make([]RoadSegment, 0)
 	gs.generateRoadFromLevel(gs.levelData)
@@ -2482,7 +2517,7 @@ func (gs *GameplayScreen) drawUI(screen *ebiten.Image) {
 	// Top right: Stats
 	// Draw background box for stats
 	statsWidth := 180.0
-	statsHeight := 260.0 // Increased height for crash counter
+	statsHeight := 320.0 // Increased height for toilet and crash bars
 	x := float64(gs.screenWidth) - statsWidth - 20.0
 	y := 20.0
 	
@@ -2530,30 +2565,31 @@ func (gs *GameplayScreen) drawUI(screen *ebiten.Image) {
 	// Food
 	foodPercent := gs.playerCar.SelectedCar.FoodLevel / gs.playerCar.SelectedCar.FoodCapacity
 	gs.drawStatusBar(screen, x, y+spacing*2, barWidth, barHeight, foodPercent, "FOOD", color.RGBA{0, 255, 0, 255}) // Green
-	
-	// Sleep
-	sleepPercent := gs.playerCar.SelectedCar.SleepLevel / gs.playerCar.SelectedCar.SleepCapacity
+
+	// Sleep (now player stat, not car stat)
+	sleepPercent := gs.SleepLevel / gs.SleepCapacity
 	gs.drawStatusBar(screen, x, y+spacing*3, barWidth, barHeight, sleepPercent, "SLEEP", color.RGBA{50, 150, 255, 255}) // Blue
-	
+
+	// Toilet
+	toiletPercent := gs.ToiletLevel / 100.0
+	gs.drawStatusBar(screen, x, y+spacing*4, barWidth, barHeight, toiletPercent, "TOILET", color.RGBA{255, 165, 0, 255}) // Orange
+
 	// Level Progress Bar
 	levelProgress := float64(gs.TotalCarsPassed - gs.PrevLevelThreshold) / float64(gs.LevelThreshold - gs.PrevLevelThreshold)
 	if levelProgress < 0 { levelProgress = 0 }
 	if levelProgress > 1 { levelProgress = 1 }
-	
-	levelLabel := fmt.Sprintf("LEVEL %d", gs.Level)
-	gs.drawStatusBar(screen, x, y+spacing*4, barWidth, barHeight, levelProgress, levelLabel, color.RGBA{255, 215, 0, 255}) // Gold
 
-	// Draw Crash Counter
-	crashesText := fmt.Sprintf("CRASHES: %d/10", gs.Crashes)
-	crashOp := &text.DrawOptions{}
-	crashOp.GeoM.Translate(x, y + spacing*5.2)
-	// Red warning color if getting close to 10
+	levelLabel := fmt.Sprintf("LEVEL %d", gs.Level)
+	gs.drawStatusBar(screen, x, y+spacing*5, barWidth, barHeight, levelProgress, levelLabel, color.RGBA{255, 215, 0, 255}) // Gold
+
+	// Crash Counter (now graphical)
+	crashPercent := float64(gs.Crashes) / 10.0
+	crashLabel := fmt.Sprintf("CRASHES %d/10", gs.Crashes)
+	crashColor := color.RGBA{200, 200, 200, 255} // Grey by default
 	if gs.Crashes >= 7 {
-		crashOp.ColorScale.ScaleWithColor(color.RGBA{255, 50, 50, 255}) // Red
-	} else {
-		crashOp.ColorScale.ScaleWithColor(color.RGBA{200, 200, 200, 255}) // Grey/White
+		crashColor = color.RGBA{255, 50, 50, 255} // Red warning
 	}
-	text.Draw(screen, crashesText, face, crashOp)
+	gs.drawStatusBar(screen, x, y+spacing*6, barWidth, barHeight, crashPercent, crashLabel, crashColor)
 
 	// DEBUG: Traffic Counter
 	gs.trafficMutex.RLock()
