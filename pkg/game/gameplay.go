@@ -80,6 +80,35 @@ func (tc *TrafficCar) Update(gs *GameplayScreen) {
 	rightLaneBlocked := false
 	leftLaneBlocked := false
 
+	// Get segment info early for logic
+	tcSegment := gs.getSegmentAt(tc.Y)
+
+	// Anti-deadlock: If speed is very low for too long, force a resolution
+	// If car is basically stopped (Velocity < 1.0)
+	if tc.VelocityY < 1.0 {
+		// If stuck for more than 3 seconds (assuming 60fps, simple counter approach needed or timestamp)
+		// Simplified approach: if stopped and blocked, try desperate maneuvers
+		
+		// If blocked ahead, try to force a lane change even if risky
+		if foundCarAhead && minDist < minTrafficDistance {
+			// Try ANY lane
+			if tc.Lane+1 < tcSegment.LaneCount && !rightLaneBlocked {
+				tc.TargetLane = tc.Lane + 1
+				tc.LaneProgress = 0.01
+				return
+			}
+			if tc.Lane > 1 && !leftLaneBlocked {
+				tc.TargetLane = tc.Lane - 1
+				tc.LaneProgress = 0.01
+				return
+			}
+			
+			// If completely stuck (blocked ahead and sides), gradually despawn if off-screen or far behind player
+			// Or just ghost through if really stuck?
+			// Let's just aggressively reduce collision box for movement if stuck
+		}
+	}
+
 	// Check against other traffic - cars are now aware of ALL nearby cars
 	for _, other := range gs.traffic {
 		if other == tc {
@@ -142,7 +171,7 @@ func (tc *TrafficCar) Update(gs *GameplayScreen) {
 	
 	// Check if player blocks adjacent lanes for lane changing
 	// Calculate player's lane index relative to traffic's current segment
-	tcSegment := gs.getSegmentAt(tc.Y)
+	// tcSegment is already calculated above
 	segLeftEdge := -float64(tcSegment.StartLaneIndex) * laneWidth
 	playerLane := int((gs.playerCar.X - segLeftEdge) / laneWidth)
 	
@@ -286,9 +315,9 @@ func (tc *TrafficCar) Update(gs *GameplayScreen) {
 
 	// Attempt lane change
 	if tc.LaneProgress == 0 && tc.TargetLane == 0 {
-		// Cooldown check (2 seconds)
+		// Cooldown check (10 seconds)
 		now := time.Now().UnixMilli()
-		if now-tc.LastLaneChangeTime < 2000 {
+		if now-tc.LastLaneChangeTime < 10000 {
 			return
 		}
 
@@ -333,27 +362,39 @@ func (tc *TrafficCar) Update(gs *GameplayScreen) {
 			}
 		}
 
-		// Random lane changes (lower priority)
-		// 0.5% chance per tick to consider changing (reduced from 1% due to 60Hz update)
-		// Never move to lane 0 - lane 1 is the minimum for traffic
-		if rand.Float64() < 0.005 {
-			canRight := !rightLaneBlocked && tc.Lane+1 < segment.LaneCount
-			canLeft := !leftLaneBlocked && tc.Lane > 1 // Changed from > 0 to > 1
+		// LIFECYCLE: Keep Right / Move to Slower Lane
+		// After 20 seconds (cooldown), try to move to a slower lane (Left, Lane-1)
+		// Only allow moving to faster lanes (Right) if stuck or evading
+		
+		// Always try to move left (slower) if possible and safe
+		if tc.Lane > 1 {
+			// Check if the slower lane (Left, Lane-1) is clear
+			canLeft := !leftLaneBlocked
 			
-			if canRight && canLeft {
-				// Random choice
-				if rand.Float64() < 0.5 {
-					tc.TargetLane = tc.Lane + 1
-				} else {
+			// If clear, take it!
+			if canLeft {
+				// 5% chance per frame to actually initiate the move (makes it feel natural but persistent)
+				if rand.Float64() < 0.05 {
 					tc.TargetLane = tc.Lane - 1
+					tc.LaneProgress = 0.01
+					return
 				}
-				tc.LaneProgress = 0.01 // Start transition
-			} else if canRight {
-				tc.TargetLane = tc.Lane + 1
-				tc.LaneProgress = 0.01
-			} else if canLeft {
-				tc.TargetLane = tc.Lane - 1
-				tc.LaneProgress = 0.01
+			}
+		}
+
+		// Overtaking (Right/Faster Lane) - ONLY if stuck behind a slow car
+		if foundCarAhead && tc.Lane+1 < segment.LaneCount {
+			// Only overtake if the car ahead is significantly slower
+			if speedOfCarAhead < tc.TargetSpeed * 0.9 {
+				canRight := !rightLaneBlocked
+				if canRight {
+					// 2% chance to overtake (reluctant to move to fast lane)
+					if rand.Float64() < 0.02 {
+						tc.TargetLane = tc.Lane + 1
+						tc.LaneProgress = 0.01
+						return
+					}
+				}
 			}
 		}
 	}
@@ -1903,7 +1944,16 @@ func (gs *GameplayScreen) updateTraffic(scrollSpeed float64, currentSegment Road
 
 			if inSameLane || transitioningToOurLane {
 				// Check if moving would cause collision
-				if math.Abs(desiredY - other.Y) < minTrafficDistance {
+				// Use a smaller collision box for movement to prevent "magnetic repulsion"
+				// effectively allowing closer following before hard stop
+				collisionDist := minTrafficDistance * 0.8 // Allow slightly closer than spawn distance
+				
+				// If deadlocked (moving very slowly), allow even closer proximity to wiggle out
+				if tc.VelocityY < 1.0 {
+					collisionDist = minTrafficDistance * 0.5
+				}
+
+				if math.Abs(desiredY - other.Y) < collisionDist {
 					canMove = false
 					break
 				}
@@ -2057,12 +2107,9 @@ func (gs *GameplayScreen) spawnTrafficInDirection(segment RoadSegment, laneWidth
 	
 	gs.trafficMutex.RLock()
 	for _, tc := range gs.traffic {
-		// Check if traffic is in this lane (within lane bounds)
-		leftEdge := -float64(segment.StartLaneIndex) * laneWidth
-		laneLeft := leftEdge + float64(lane)*laneWidth
-		laneRight := laneLeft + laneWidth
-		
-		if tc.X >= laneLeft && tc.X < laneRight {
+		// Check if traffic is logically in this lane or moving into it
+		// This matches the updateTraffic collision logic to prevent spawning on top of cars
+		if tc.Lane == lane || tc.TargetLane == lane {
 			laneTraffic = append(laneTraffic, tc)
 		}
 	}
@@ -2134,10 +2181,27 @@ func (gs *GameplayScreen) spawnTrafficInDirection(segment RoadSegment, laneWidth
 	leftEdge := -float64(segment.StartLaneIndex) * laneWidth
 	laneCenterX := leftEdge + float64(lane)*laneWidth + laneWidth/2
 	
+	// Check restriction: Only one car spawned ahead in player's lane
+	playerLane := gs.getCurrentLane(segment, laneWidth)
+	if ahead && lane == playerLane {
+		carsAheadInPlayerLane := 0
+		for _, tc := range laneTraffic {
+			if tc.Y < playerY { // Ahead
+				carsAheadInPlayerLane++
+			}
+		}
+		if carsAheadInPlayerLane >= 1 {
+			return
+		}
+	}
+	
 	// Determine traffic speed (player speed limit minus 5mph)
 	// Lane 0=50, Lane 1=60, Lane 2=70, etc. (match player steps)
-	speedLimitMPH := 50.0 + float64(lane)*10.0 - 5.0
-	trafficVelocityY := speedLimitMPH / MPHPerPixelPerFrame
+	speedLimitMPH := 50.0 + float64(lane)*10.0
+	// Target speed MUST be 5mph below the limit
+	targetSpeedMPH := speedLimitMPH - 5.0
+	
+	trafficVelocityY := targetSpeedMPH / MPHPerPixelPerFrame
 	
 	// Random car colors for variety
 	colors := []color.RGBA{
@@ -2166,6 +2230,7 @@ func (gs *GameplayScreen) spawnTrafficInDirection(segment RoadSegment, laneWidth
 		Lane:        lane,
 		Color:       carColor,
 		Passed:      !ahead, // If spawned behind, it's already passed
+		LastLaneChangeTime: time.Now().UnixMilli(), // Initialize with spawn time
 	}
 	
 	gs.trafficMutex.Lock()
@@ -2386,6 +2451,26 @@ func (gs *GameplayScreen) drawUI(screen *ebiten.Image) {
 	
 	levelLabel := fmt.Sprintf("LEVEL %d", gs.Level)
 	gs.drawStatusBar(screen, x, y+spacing*4, barWidth, barHeight, levelProgress, levelLabel, color.RGBA{255, 215, 0, 255}) // Gold
+	// DEBUG: Traffic Counter
+	gs.trafficMutex.RLock()
+	totalCars := len(gs.traffic)
+	carsAhead := 0
+	carsBehind := 0
+	playerY := gs.playerCar.Y
+	for _, tc := range gs.traffic {
+		if tc.Y < playerY {
+			carsAhead++
+		} else {
+			carsBehind++
+		}
+	}
+	gs.trafficMutex.RUnlock()
+
+	debugText := fmt.Sprintf("CARS: %d (AHEAD: %d, BEHIND: %d)", totalCars, carsAhead, carsBehind)
+	debugOp := &text.DrawOptions{}
+	debugOp.GeoM.Translate(20, float64(gs.screenHeight)-30)
+	debugOp.ColorScale.ScaleWithColor(color.RGBA{200, 200, 200, 255})
+	text.Draw(screen, debugText, face, debugOp)
 }
 
 func (gs *GameplayScreen) drawPetrolStationTarmac(screen *ebiten.Image) {
