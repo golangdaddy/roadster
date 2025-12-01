@@ -777,6 +777,14 @@ func (gs *GameplayScreen) isLaneClear(laneIdx int, segment RoadSegment, laneWidt
 func (gs *GameplayScreen) updateAutoPilot(currentSegment RoadSegment, segmentIdx int, laneWidth float64, maxSpeed float64) {
 	laneChanged := false
 
+	// Calculate progress in current segment (0.0 to 1.0)
+	progress := 0.0
+	if segmentIdx < len(gs.roadSegments)-1 {
+		progress = (currentSegment.Y - gs.playerCar.Y) / 600.0
+		if progress < 0 { progress = 0 }
+		if progress > 1 { progress = 1 }
+	}
+
 	// 1. Determine target lane position (and interpolated bounds)
 	startLeftEdge := -float64(currentSegment.StartLaneIndex) * laneWidth
 	// Default bounds (full segment width)
@@ -789,34 +797,18 @@ func (gs *GameplayScreen) updateAutoPilot(currentSegment RoadSegment, segmentIdx
 		nextLeft := -float64(nextSegment.StartLaneIndex) * laneWidth
 		nextRight := nextLeft + float64(nextSegment.LaneCount)*laneWidth
 
-		progress := (currentSegment.Y - gs.playerCar.Y) / 600.0
-		if progress < 0 {
-			progress = 0
-		}
-		if progress > 1 {
-			progress = 1
-		}
-
 		boundRight = boundRight + (nextRight-boundRight)*progress
 		boundLeft = boundLeft + (nextLeft-boundLeft)*progress
 		
 		// PREDICTIVE LANE CHECK:
 		// If the current lane will not exist in the next segment (lane count decreasing),
 		// or if we need to move into a new lane (on-ramp), we need to act early.
-		// Look ahead at 50% progress to trigger early lane change.
-		if progress > 0.5 {
+		// User request: "move ideally 1 segment before you think it should"
+		// So we look ahead immediately (progress > 0.0) instead of waiting.
+		if progress >= 0.0 {
 			// Check if our current lane index is valid in the NEXT segment
 			// We need to map current lane index to absolute position, then to next segment index
 			// Simplified: Just check relative indices if alignment is standard
-			
-			// Case 1: Lane Ending (Merging Left or Right)
-			// If we are in the rightmost lane, and next segment has fewer lanes
-			// Assuming standard right-lane merge for now, or relying on bounds check
-			// The bounds check above handles "running out of road", but it's reactive.
-			
-			// Proactive Check:
-			// If next segment start index > current segment start index, left lane is disappearing?
-			// If next segment lane count < current, a lane is disappearing.
 			
 			// Check if our target lane is valid in next segment
 			nextStartLaneIdx := nextSegment.StartLaneIndex
@@ -838,6 +830,33 @@ func (gs *GameplayScreen) updateAutoPilot(currentSegment RoadSegment, segmentIdx
 				gs.autoDriveLane--
 				laneChanged = true
 				gs.lastAutoDriveLaneChange = time.Now().UnixMilli()
+			} else {
+				// NEW: Check if next lane exists but is closing ("E" or "C")
+				// We want to vacate BEFORE we enter the closing segment if possible.
+				nextRelLane := currentAbsLane - nextStartLaneIdx
+				if nextRelLane >= 0 && nextRelLane < len(nextSegment.RoadTypes) {
+					nextType := nextSegment.RoadTypes[nextRelLane]
+					if nextType == "E" || nextType == "C" {
+						// Lane is closing in the next segment! Move out now.
+						if nextType == "E" {
+							// E is merge left (lane ending on right) -> Move Left
+							// Wait, "E" logic: E is appended (rightmost). So it merges Left.
+							// So we must move Left.
+							if gs.autoDriveLane > 0 {
+								gs.autoDriveLane--
+								laneChanged = true
+								gs.lastAutoDriveLaneChange = time.Now().UnixMilli()
+							}
+						} else if nextType == "C" {
+							// C is merge right (lane ending on left) -> Move Right
+							if gs.autoDriveLane < currentSegment.LaneCount-1 {
+								gs.autoDriveLane++
+								laneChanged = true
+								gs.lastAutoDriveLaneChange = time.Now().UnixMilli()
+							}
+						}
+					}
+				}
 			}
 		}
 	}
@@ -870,6 +889,7 @@ func (gs *GameplayScreen) updateAutoPilot(currentSegment RoadSegment, segmentIdx
 
 	// Helper to check physical availability of lane
 	checkAvailability := func(laneIdx int) bool {
+		// Check bounds first
 		laneCenterX := startLeftEdge + float64(laneIdx)*laneWidth + laneWidth/2
 		// Strict margin: center must be inside bounds by half lane width
 		if laneCenterX > boundRight-40 {
@@ -878,6 +898,29 @@ func (gs *GameplayScreen) updateAutoPilot(currentSegment RoadSegment, segmentIdx
 		if laneCenterX < boundLeft+40 {
 			return false
 		}
+
+		// Check Road Type Geometry (Ramps)
+		// Ensure we don't drive on the non-existent part of a ramp
+		if laneIdx >= 0 && laneIdx < len(currentSegment.RoadTypes) {
+			rType := currentSegment.RoadTypes[laneIdx]
+			
+			// On-ramps (Opening lanes): "D" (Right Widen), "B" (Layby Start/Left Widen)
+			// These lanes are physically blocked at start and open up
+			if rType == "D" || rType == "B" {
+				// Allow entry immediately (0.0) to match "1 segment before" behavior request
+				// Physics bounds (interpolated above) will handle the "clipping" check
+				// if progress < 0.3 { return false } 
+			}
+
+			// Off-ramps (Closing lanes): "E" (Left Merge/Right Narrow), "C" (Layby End/Left Merge)
+			// These lanes close down.
+			if rType == "E" || rType == "C" {
+				// CONSIDER UNAVAILABLE IMMEDIATELY to force exit if we are still in here
+				// This prevents overrunning into the grass.
+				return false
+			}
+		}
+
 		return true
 	}
 
