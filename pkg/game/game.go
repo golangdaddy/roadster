@@ -80,22 +80,33 @@ func (game *GameLogic) loadLevel(filename string) (*road.RoadController, *LevelD
 		return nil, nil, err
 	}
 
-	// Reconstruct lines from Segments and Laybys
-	// Initialize with "X" + segment to assume empty lane 0
-	reconstructedLines := make([]string, len(levelDef.Segments))
-	for i, seg := range levelDef.Segments {
-		reconstructedLines[i] = "X" + seg
+	// Reconstruct lines from Layout and Sections
+	reconstructedLines := make([]string, 0)
+	for _, sectionName := range levelDef.Layout {
+		if section, ok := levelDef.Sections[sectionName]; ok {
+			for _, seg := range section.Segments {
+				// Initialize with "X" + segment to assume empty lane 0
+				reconstructedLines = append(reconstructedLines, "X"+seg)
+			}
+		}
 	}
 
 	// Apply Laybys
+	// Note: We need to make sure we don't overwrite existing road types if we can avoid it,
+	// but the previous logic just replaced the line.
+	// We also need to handle the case where Laybys might be defined relative to the start of the level.
 	for _, layby := range levelDef.Laybys {
 		idx := layby.StartSegment
 		if idx >= len(reconstructedLines) {
 			continue
 		}
 
+		// The original segment string (without the prepended X)
+		// We need to fetch it from the reconstructedLines (stripping the X we just added)
+		originalSegment := reconstructedLines[idx][1:]
+
 		// Start of layby (B)
-		reconstructedLines[idx] = "B" + levelDef.Segments[idx]
+		reconstructedLines[idx] = "B" + originalSegment
 		idx++
 
 		// Services
@@ -103,6 +114,9 @@ func (game *GameLogic) loadLevel(filename string) (*road.RoadController, *LevelD
 			if idx >= len(reconstructedLines) {
 				break
 			}
+			
+			originalSegment = reconstructedLines[idx][1:]
+			
 			// Map service type to character
 			char := "X"
 			if service.Type == road.ServiceTypePetrol {
@@ -111,19 +125,21 @@ func (game *GameLogic) loadLevel(filename string) (*road.RoadController, *LevelD
 			// Could add cases for other service types here (e.g. Food -> ?, Restroom -> ?)
 			// For now, only Petrol is fully implemented in rendering (F)
 			
-			reconstructedLines[idx] = char + levelDef.Segments[idx]
+			reconstructedLines[idx] = char + originalSegment
 			idx++
 		}
 
 		// Padding (Empty Layby Lane) - extends layby by 1 segment
 		if idx < len(reconstructedLines) {
-			reconstructedLines[idx] = "G" + levelDef.Segments[idx]
+			originalSegment = reconstructedLines[idx][1:]
+			reconstructedLines[idx] = "G" + originalSegment
 			idx++
 		}
 
 		// End of layby (C)
 		if idx < len(reconstructedLines) {
-			reconstructedLines[idx] = "C" + levelDef.Segments[idx]
+			originalSegment = reconstructedLines[idx][1:]
+			reconstructedLines[idx] = "C" + originalSegment
 		}
 	}
 

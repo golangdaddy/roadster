@@ -419,10 +419,17 @@ type PetrolStation struct {
 	Lane int
 }
 
+type Billboard struct {
+	X, Y float64
+	Text string
+	DistanceText string
+}
+
 // GameplayScreen represents the main driving gameplay
 type GameplayScreen struct {
 	roadSegments []RoadSegment
 	petrolStations []PetrolStation
+	billboards     []Billboard
 	playerCar    *Car
 	traffic      []*TrafficCar // Traffic vehicles
 	trafficMutex sync.RWMutex  // Mutex for safe concurrent access to traffic
@@ -459,6 +466,7 @@ func NewGameplayScreen(selectedCar *car.Car, levelData *LevelData, onGameEnd fun
 	gs := &GameplayScreen{
 		roadSegments: make([]RoadSegment, 0),
 		petrolStations: make([]PetrolStation, 0),
+		billboards:   make([]Billboard, 0),
 		traffic:      make([]*TrafficCar, 0),
 		scrollSpeed:  2.0,
 		roadTextures: make(map[string]*ebiten.Image),
@@ -547,6 +555,8 @@ func (gs *GameplayScreen) generateRoadFromLevel(levelData *LevelData) {
 	segmentHeight := 600.0 // Height of each road segment in world space (600px as specified)
 
 	y := float64(gs.screenHeight) // Start from bottom of screen
+	
+	// First pass: Generate segments and find petrol stations
 	for i, segment := range levelData.Segments {
 		// Start with only 1 lane for the first few segments
 		laneCount := segment.LaneCount
@@ -598,6 +608,42 @@ func (gs *GameplayScreen) generateRoadFromLevel(levelData *LevelData) {
 
 		gs.roadSegments = append(gs.roadSegments, roadSegment)
 		y -= segmentHeight // Segments go upward
+	}
+
+	// Second pass: Place billboards relative to petrol stations
+	// 1 mile ≈ 38 segments (22800px)
+	// 0.5 mile ≈ 19 segments (11400px)
+	for _, station := range gs.petrolStations {
+		// Place 1 mile billboard
+		// Y increases "backwards" (down the screen/earlier in level is HIGHER Y)
+		// But wait. y starts at screenHeight and decreases.
+		// So earlier segments have HIGHER Y.
+		// So "before" the station means Y + Distance.
+		
+		billboard1Y := station.Y + 22800.0
+		billboard05Y := station.Y + 11400.0
+		
+		// Find X position (left side of road)
+		// We need to find the segment at that Y to know where the road edge is
+		seg1 := gs.getSegmentAtY(billboard1Y)
+		leftEdge1 := -float64(seg1.StartLaneIndex) * 80.0
+		
+		seg05 := gs.getSegmentAtY(billboard05Y)
+		leftEdge05 := -float64(seg05.StartLaneIndex) * 80.0
+		
+		gs.billboards = append(gs.billboards, Billboard{
+			X: leftEdge1 - 120, // Left of road
+			Y: billboard1Y,
+			Text: "SERVICES",
+			DistanceText: "1 MILE",
+		})
+		
+		gs.billboards = append(gs.billboards, Billboard{
+			X: leftEdge05 - 120, // Left of road
+			Y: billboard05Y,
+			Text: "SERVICES",
+			DistanceText: "1/2 MILE",
+		})
 	}
 }
 
@@ -1103,6 +1149,9 @@ func (gs *GameplayScreen) Draw(screen *ebiten.Image) {
 	gs.drawPetrolStationTarmac(screen)
 	gs.drawRoad(screen)
 	gs.drawPetrolStations(screen)
+	
+	// Draw billboards
+	gs.drawBillboards(screen)
 
 	// Draw traffic (behind player car)
 	gs.drawTraffic(screen)
@@ -2572,6 +2621,72 @@ func (gs *GameplayScreen) drawPetrolStations(screen *ebiten.Image) {
 		textOp.GeoM.Translate(screenX, screenY-15)
 		textOp.ColorScale.ScaleWithColor(color.White)
 		text.Draw(screen, "FUEL", face, textOp)
+	}
+}
+
+func (gs *GameplayScreen) drawBillboards(screen *ebiten.Image) {
+	face := text.NewGoXFace(bitmapfont.Face)
+	for _, bb := range gs.billboards {
+		// Calculate screen pos
+		screenX := bb.X - gs.cameraX
+		screenY := bb.Y - gs.cameraY
+
+		// Only draw if visible
+		if screenY < -100 || screenY > float64(gs.screenHeight)+100 {
+			continue
+		}
+
+		// Draw Billboard Board (Blue)
+		boardW, boardH := 100, 60
+		boardImg := ebiten.NewImage(boardW, boardH)
+		boardImg.Fill(color.RGBA{0, 50, 150, 255}) // Dark Blue
+		
+		// Border
+		borderCol := color.White
+		for x := 0; x < boardW; x++ {
+			boardImg.Set(x, 0, borderCol)
+			boardImg.Set(x, boardH-1, borderCol)
+		}
+		for y := 0; y < boardH; y++ {
+			boardImg.Set(0, y, borderCol)
+			boardImg.Set(boardW-1, y, borderCol)
+		}
+
+		// Legs
+		legsImg := ebiten.NewImage(boardW, 40)
+		// Left leg
+		for x := 10; x < 15; x++ {
+			for y := 0; y < 40; y++ {
+				legsImg.Set(x, y, color.RGBA{100, 100, 100, 255})
+			}
+		}
+		// Right leg
+		for x := boardW-15; x < boardW-10; x++ {
+			for y := 0; y < 40; y++ {
+				legsImg.Set(x, y, color.RGBA{100, 100, 100, 255})
+			}
+		}
+
+		// Draw legs first (so they are behind)
+		legsOp := &ebiten.DrawImageOptions{}
+		legsOp.GeoM.Translate(screenX, screenY + float64(boardH))
+		screen.DrawImage(legsImg, legsOp)
+
+		// Draw board
+		op := &ebiten.DrawImageOptions{}
+		op.GeoM.Translate(screenX, screenY)
+		screen.DrawImage(boardImg, op)
+
+		// Text
+		textOp := &text.DrawOptions{}
+		textOp.GeoM.Translate(screenX + 10, screenY + 15)
+		textOp.ColorScale.ScaleWithColor(color.White)
+		text.Draw(screen, bb.Text, face, textOp)
+		
+		distOp := &text.DrawOptions{}
+		distOp.GeoM.Translate(screenX + 10, screenY + 35)
+		distOp.ColorScale.ScaleWithColor(color.RGBA{255, 255, 0, 255}) // Yellow
+		text.Draw(screen, bb.DistanceText, face, distOp)
 	}
 }
 

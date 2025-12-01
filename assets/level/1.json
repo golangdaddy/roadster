@@ -1,204 +1,83 @@
 {
   "laybys": [
     {
-      "StartSegment": 4,
-      "Services": [
-        {
-          "Type": 0,
-          "Position": 0
-        },
-        {
-          "Type": 0,
-          "Position": 0
-        }
+      "type": 0,
+      "start_segment": 3,
+      "services": [
+        { "type": 0, "position": 0 },
+        { "type": 0, "position": 0 }
       ]
     },
     {
-      "StartSegment": 15,
-      "Services": [
-        {
-          "Type": 0,
-          "Position": 0
-        },
-        {
-          "Type": 0,
-          "Position": 0
-        }
+      "type": 0,
+      "start_segment": 150,
+      "services": [
+        { "type": 0, "position": 0 },
+        { "type": 0, "position": 0 }
       ]
     },
     {
-      "StartSegment": 145,
-      "Services": [
-        {
-          "Type": 0,
-          "Position": 0
-        },
-        {
-          "Type": 0,
-          "Position": 0
-        }
+      "type": 0,
+      "start_segment": 300,
+      "services": [
+        { "type": 0, "position": 0 },
+        { "type": 0, "position": 0 }
       ]
     }
   ],
-  "segments": [
-    "A",
-    "A",
-    "A",
-    "A",
-    "A",
-    "A",
-    "A",
-    "A",
-    "A",
-    "A",
-    "A",
-    "AD",
-    "AA",
-    "AA",
-    "AA",
-    "AA",
-    "AA",
-    "AA",
-    "AA",
-    "AAD",
-    "AAA",
-    "AAA",
-    "AAA",
-    "AAA",
-    "AAA",
-    "AAA",
-    "AAA",
-    "AAA",
-    "AAA",
-    "AAA",
-    "AAA",
-    "AAA",
-    "AAA",
-    "AAA",
-    "AAA",
-    "AAA",
-    "AAA",
-    "AAA",
-    "AAA",
-    "AAA",
-    "AAA",
-    "AAA",
-    "AAA",
-    "AAA",
-    "AAA",
-    "AAA",
-    "AAA",
-    "AAA",
-    "AAA",
-    "AAA",
-    "AAA",
-    "AAA",
-    "AAA",
-    "AAA",
-    "AAA",
-    "AAAD",
-    "AAAA",
-    "AAAA",
-    "AAAA",
-    "AAAA",
-    "AAAA",
-    "AAAA",
-    "AAAA",
-    "AAAA",
-    "AAAA",
-    "AAAAD",
-    "AAAAA",
-    "AAAAA",
-    "AAAAA",
-    "AAAAA",
-    "AAAAA",
-    "AAAAA",
-    "AAAAA",
-    "AAAAA",
-    "AAAAA",
-    "AAAAAD",
-    "AAAAAA",
-    "AAAAAA",
-    "AAAAAA",
-    "AAAAAA",
-    "AAAAAA",
-    "AAAAAA",
-    "AAAAAA",
-    "AAAAAA",
-    "AAAAAA",
-    "AAAAAA",
-    "AAAAAA",
-    "AAAAAA",
-    "AAAAAA",
-    "AAAAAAD",
-    "AAAAAAA",
-    "AAAAAAA",
-    "AAAAAAA",
-    "AAAAAAA",
-    "AAAAAAA",
-    "AAAAAAA",
-    "AAAAAAA",
-    "AAAAAAA",
-    "AAAAAAA",
-    "AAAAAAA",
-    "AAAAAAA",
-    "AAAAAAA",
-    "AAAAAAA",
-    "AAAAAAA",
-    "AAAAAAA",
-    "AAAAAAA",
-    "AAAAAAA",
-    "AAAAAAA",
-    "AAAAAAA",
-    "AAAAAAA",
-    "AAAAAAAD",
-    "AAAAAAAA",
-    "AAAAAAAA",
-    "AAAAAAAA",
-    "AAAAAAAA",
-    "AAAAAAAA",
-    "AAAAAAAA",
-    "AAAAAAAA",
-    "AAAAAAAA",
-    "AAAAAAAA",
-    "AAAAAAAA",
-    "AAAAAAAA",
-    "AAAAAAAA",
-    "AAAAAAAA",
-    "AAAAAAAAD",
-    "AAAAAAAAA",
-    "AAAAAAAAA",
-    "AAAAAAAAA",
-    "AAAAAAAAA",
-    "AAAAAAAAA",
-    "AAAAAAAAA",
-    "AAAAAAAAA",
-    "AAAAAAAAA",
-    "AAAAAAAAA",
-    "AAAAAAAAA",
-    "AAAAAAAAE",
-    "AAAAAAAA",
-    "AAAAAAAA",
-    "AAAAAAAA",
-    "AAAAAAAA",
-    "AAAAAAAA",
-    "AAAAAAAA",
-    "AAAAAAAA",
-    "AAAAAAAA",
-    "AAAAAAAA",
-    "AAAAAAAA",
-    "AAAAAAAA",
-    "AAAAAAAA",
-    "AAAAAAAA",
-    "AAAAAAAA",
-    "AAAAAAAA",
-    "AAAAAAAA",
-    "AAAAAAAA",
-    "AAAAAAAA",
-    "AAAAAAAA",
-    "AAAAAAAA",
-    "AAAAAAAA",
-    "AAAAAAAA",
-    "AAAAAAAA"
+  "sections": {
+    "lane1": {
+      "segments": [
+        "A", "A", "A", "A", "A", "A", "A", "A", "A", "A"
+      ]
+    },
+    "lane1_to_2": {
+      "segments": ["AD"]
+    },
+    "lane2": {
+      "segments": [
+        "AA", "AA", "AA", "AA", "AA", "AA", "AA", "AA", "AA", "AA"
+      ]
+    },
+    "lane2_to_3": {
+      "segments": ["AAD"]
+    },
+    "lane3": {
+      "segments": [
+        "AAA", "AAA", "AAA", "AAA", "AAA", "AAA", "AAA", "AAA", "AAA", "AAA"
+      ]
+    },
+    "lane3_to_4": {
+      "segments": ["AAAD"]
+    },
+    "lane4": {
+      "segments": [
+        "AAAA", "AAAA", "AAAA", "AAAA", "AAAA", "AAAA", "AAAA", "AAAA", "AAAA", "AAAA"
+      ]
+    },
+    "lane4_to_5": {
+      "segments": ["AAAAD"]
+    },
+    "lane5": {
+      "segments": [
+        "AAAAA", "AAAAA", "AAAAA", "AAAAA", "AAAAA", "AAAAA", "AAAAA", "AAAAA", "AAAAA", "AAAAA"
+      ]
+    },
+    "lane5_to_6": {
+      "segments": ["AAAAAD"]
+    },
+    "lane6": {
+      "segments": [
+        "AAAAAA", "AAAAAA", "AAAAAA", "AAAAAA", "AAAAAA", "AAAAAA", "AAAAAA", "AAAAAA", "AAAAAA", "AAAAAA"
+      ]
+    }
+  },
+  "layout": [
+    "lane1", "lane1_to_2",
+    "lane2", "lane2_to_3",
+    "lane3", "lane3", "lane3", "lane3", "lane3_to_4",
+    "lane4", "lane4", "lane4", "lane4_to_5",
+    "lane5", "lane5", "lane5", "lane5_to_6",
+    "lane6", "lane6", "lane6", "lane6", "lane6", "lane6"
   ]
 }
