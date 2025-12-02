@@ -37,6 +37,7 @@ type TrafficCar struct {
 	X, Y         float64    // World position
 	VelocityY    float64    // Vertical velocity (current speed)
 	VelocityX    float64    // Horizontal velocity (physics/bounce)
+	SteeringAngle float64   // Steering angle (-1.0 to 1.0)
 	PhysicsOffsetX float64  // DEPRECATED: Removed in favor of direct X physics
 	TargetSpeed  float64    // Desired speed (based on speed limit)
 	Acceleration float64    // Acceleration rate
@@ -61,6 +62,120 @@ type PlayerPed struct {
 	X, Y      float64
 	Speed     float64
 	Sprite    *ebiten.Image
+}
+
+// PhysicsUpdate handles the physics simulation for the traffic car (movement, steering)
+func (tc *TrafficCar) PhysicsUpdate(gs *GameplayScreen) {
+	// 1. Apply Y Movement (Forward) based on velocity
+	// Note: Acceleration logic is in Update (AI), here we just integrate position
+	tc.Y -= tc.VelocityY
+
+	// 2. Apply X Movement (Steering + Physics)
+	
+	// Get segment info for lane positioning
+	tcSegment := gs.getSegmentAt(tc.Y)
+	laneWidth := 80.0
+	leftEdge := -float64(tcSegment.StartLaneIndex) * laneWidth
+	
+	// Determine Target X
+	var targetX float64
+	if tc.TargetLane != 0 {
+		// Changing lanes
+		targetX = leftEdge + float64(tc.TargetLane)*laneWidth + laneWidth/2
+	} else {
+		// Staying in lane
+		targetX = leftEdge + float64(tc.Lane)*laneWidth + laneWidth/2
+	}
+	
+	// Calculate Error
+	errorX := targetX - tc.X
+	
+	// Complete lane change if close enough
+	if tc.TargetLane != 0 && math.Abs(errorX) < 5.0 {
+		tc.X = targetX
+		tc.Lane = tc.TargetLane
+		tc.TargetLane = 0
+		tc.LastLaneChangeTime = time.Now().UnixMilli()
+		tc.VelocityX *= 0.5 // Dampen residual velocity
+		tc.SteeringAngle = 0
+		
+		// Safety check: Never allow traffic in lane 0
+		if tc.Lane < 1 {
+			tc.Lane = 1
+		}
+		
+		// Update TargetSpeed for new lane
+		speedLimitMPH := 50.0 + float64(tc.Lane)*10.0
+		tc.TargetSpeed = (speedLimitMPH - 5.0) / MPHPerPixelPerFrame
+	} else {
+		// PID Steering Logic (Mimic Player)
+		// P-Controller for steering angle
+		kp := 0.002 // Sensitivity
+		// kd := 0.1   // Damping (unused in simple logic)
+		
+		// Target steering angle based on error
+		targetSteer := errorX * kp
+		
+		// Apply damping based on current lateral velocity (counter-steer to stabilize)
+		targetSteer -= tc.VelocityX * 0.05
+		
+		// Smoothly interpolate steering angle (simulating wheel turn speed)
+		steerResponse := 0.1
+		tc.SteeringAngle += (targetSteer - tc.SteeringAngle) * steerResponse
+		
+		// Clamp steering
+		if tc.SteeringAngle > 1.0 { tc.SteeringAngle = 1.0 }
+		if tc.SteeringAngle < -1.0 { tc.SteeringAngle = -1.0 }
+		
+		// Apply Steering Force to VelocityX
+		// Force = SteeringAngle * Grip * SpeedFactor
+		// Cars turn better at speed (up to a point)
+		speedFactor := math.Min(tc.VelocityY / 5.0, 1.0) + 0.2 // Minimal turning at 0 speed
+		turnSpeed := 0.5 // Lateral acceleration power
+		
+		tc.VelocityX += tc.SteeringAngle * turnSpeed * speedFactor
+		
+		// Apply Friction/Drag to VelocityX
+		tc.VelocityX *= 0.92
+	}
+	
+	// Integrate X Position
+	tc.X += tc.VelocityX
+}
+
+// SanityCheck verifies if the car is in a valid state and cleans up if necessary
+// Returns false if the car should be destroyed
+func (tc *TrafficCar) SanityCheck(gs *GameplayScreen) bool {
+	// 1. Check if off-screen (handled in updateTraffic loop, but good to double check)
+	// This is mainly for logic safety
+	
+	// 2. Check for valid road surface
+	// If we are not changing lanes, we must be within the road bounds
+	// If we are changing lanes, we might be between valid bounds if the road widens/narrows, but we should generally be safe.
+	// The critical check requested is: "destroy the vehicle based on a check to see if the car is even driving on legal road area"
+	
+	// Calculate legal bounds
+	tcSegment := gs.getSegmentAt(tc.Y)
+	laneWidth := 80.0
+	leftEdge := -float64(tcSegment.StartLaneIndex) * laneWidth
+	rightEdge := leftEdge + float64(tcSegment.LaneCount)*laneWidth
+	
+	// Allow some tolerance for visual overhang (half car width + buffer)
+	tolerance := 30.0
+	
+	if tc.X < leftEdge-tolerance || tc.X > rightEdge+tolerance {
+		// Car is driving on grass/void!
+		// Check if it's just transitioning?
+		// If LaneProgress > 0, we might be moving to a valid lane.
+		// But if we are physically outside, it's bad.
+		
+		// Exception: Transitioning INTO a new lane that starts here (on-ramp)
+		// Or OUT of a lane that ended.
+		
+		return false // Destroy immediately
+	}
+	
+	return true
 }
 
 // Update runs the AI logic to maintain safe distance
@@ -357,11 +472,54 @@ func (tc *TrafficCar) Update(gs *GameplayScreen) {
 				
 				// OFFSCREEN CHECK: If car is significantly offscreen (behind or far ahead), just destroy it
 				// This saves processing and avoids glitches with cars stuck in void
+				// Also catches cars that failed to merge and drove off the end of the lane into the "void"
+				// If we are past the end of the lane (Y < nextSegment.Y) and still here, destroy.
 				distFromPlayer := tc.Y - gs.playerCar.Y
-				if math.Abs(distFromPlayer) > 800 { // 800px is roughly screen height + buffer
-					// Mark for deletion (we can't delete from slice here easily, so we'll move it to infinity)
-					tc.Y = 1000000 // Move to far off place, will be cleaned up next frame by bounds check or regular cleanup
+				isOffScreen := math.Abs(distFromPlayer) > 800
+				
+				if isOffScreen || (tc.Y < nextSegment.Y && !laneExists) {
+					// We are either offscreen OR we have driven past the valid road segment for our lane
+					// Destroy to prevent driving on grass
+					tc.Y = 1000000 
 					return
+				}
+
+				// EMERGENCY BRAKE LOGIC
+				// If we are behind the player (tc.Y > gs.playerCar.Y) and cannot merge, we must STOP.
+				// "if a NPC car is in a fster lane that is ending and he is behind the player and cannot merge into the slower lane he should stop ASAP until he can"
+				if tc.Y > gs.playerCar.Y {
+					// Check if merge is possible (Lane validity handled below)
+					// We only check merge possibility here if we are about to force a merge
+					// But here we just need to stop if we are about to run out of road
+					
+					// Calculate how much road is left before the segment ends
+					distToSegmentEnd := tc.Y - nextSegment.Y // Approximately
+					if distToSegmentEnd < 200 {
+						// Getting close to the end of the lane
+						// Check if we can merge safely
+						
+						// Try left merge
+						canMergeLeft := currentAbsLane > nextEndLaneIdx
+						if canMergeLeft {
+							if leftLaneBlocked {
+								// Cannot merge! STOP!
+								tc.VelocityY = 0 // Hard brake
+								tc.TargetSpeed = 0
+								return
+							}
+						}
+						
+						// Try right merge
+						canMergeRight := currentAbsLane < nextStartLaneIdx
+						if canMergeRight {
+							if rightLaneBlocked {
+								// Cannot merge! STOP!
+								tc.VelocityY = 0
+								tc.TargetSpeed = 0
+								return
+							}
+						}
+					}
 				}
 
 				// Decide which way to merge based on where the road went
@@ -2232,23 +2390,22 @@ func (gs *GameplayScreen) updateTraffic(scrollSpeed float64, currentSegment Road
 		tc.Update(gs)
 	}
 
-	// Second pass: Apply movement with physics-based collisions
+	// Second pass: Apply movement and collisions using first-class physics update
 	for i := 0; i < len(gs.traffic); i++ {
 		tc := gs.traffic[i]
 
-		// 1. Apply Y Movement (Forward)
-		tc.Y -= tc.VelocityY
-		
-		// 2. Apply Physics X Movement (Bouncing/Sliding)
-		tc.PhysicsOffsetX += tc.VelocityX
-		// Friction/Decay for side movement
-		tc.VelocityX *= 0.9 
-		// Return to center force (decay offset) if not crashing constantly
-		if tc.LaneProgress == 0 {
-			tc.PhysicsOffsetX *= 0.95 
+		// Call Physics Update (Sub-update for physics and movement)
+		tc.PhysicsUpdate(gs)
+
+		// Sanity Check (Destroy if driving on grass)
+		if !tc.SanityCheck(gs) {
+			gs.traffic = append(gs.traffic[:i], gs.traffic[i+1:]...)
+			i--
+			continue
 		}
 
-		// 3. Collision Resolution
+		// 3. Collision Resolution (Inter-car)
+		// Ideally this would be in a physics engine, but we do it here as it involves multiple entities
 		for j := 0; j < len(gs.traffic); j++ {
 			if i == j {
 				continue
@@ -2261,7 +2418,6 @@ func (gs *GameplayScreen) updateTraffic(scrollSpeed float64, currentSegment Road
 			dist := math.Hypot(dx, dy)
 			
 			// Collision Radius (approx car length/width avg)
-			// Car is 40x64. Radius ~35?
 			minDist := 50.0 
 			
 			if dist < minDist {
@@ -2287,10 +2443,9 @@ func (gs *GameplayScreen) updateTraffic(scrollSpeed float64, currentSegment Road
 					restitution := 0.5 // Bounciness
 					
 					// Impulse scalar
-					// j = -(1+e) * dot / (1/m1 + 1/m2)
 					m1 := tc.Mass
 					m2 := other.Mass
-					if m1 == 0 { m1 = 1200 } // Default mass safety
+					if m1 == 0 { m1 = 1200 }
 					if m2 == 0 { m2 = 1200 }
 					
 					j := -(1 + restitution) * dot / (1/m1 + 1/m2)
@@ -2300,27 +2455,26 @@ func (gs *GameplayScreen) updateTraffic(scrollSpeed float64, currentSegment Road
 					iy := j * ny
 					
 					// Apply velocity change
-					// v1 += I/m1
 					tc.VelocityX += ix / m1
-					// NewVy = OldVy - iy/m1 (because Vy is inverted stored velocity)
 					tc.VelocityY -= iy / m1
 					
 					other.VelocityX -= ix / m2
 					other.VelocityY += iy / m2
 					
-					// Positional Correction (Push apart to prevent sticking)
+					// Positional Correction
 					overlap := minDist - dist
-					percent := 0.5 // Split overlap
-					slop := 1.0 // Tolerance
+					percent := 0.5 
+					slop := 1.0
 					
 					if overlap > slop {
 						correctionX := nx * overlap * percent
 						correctionY := ny * overlap * percent
 						
-						tc.PhysicsOffsetX += correctionX // Apply to offset for X
+						// Apply correction directly to position
+						tc.X += correctionX
 						tc.Y += correctionY
 						
-						other.PhysicsOffsetX -= correctionX
+						other.X -= correctionX
 						other.Y -= correctionY
 					}
 				}
@@ -2328,7 +2482,6 @@ func (gs *GameplayScreen) updateTraffic(scrollSpeed float64, currentSegment Road
 		}
 
 		// Check if player has passed this car (overtaken)
-		// Player Y < Traffic Y means Player is AHEAD (further up the road)
 		if !tc.Passed && gs.playerCar.Y < tc.Y {
 			tc.Passed = true
 			gs.TotalCarsPassed++
@@ -2339,99 +2492,6 @@ func (gs *GameplayScreen) updateTraffic(scrollSpeed float64, currentSegment Road
 				gs.PrevLevelThreshold = gs.LevelThreshold
 				gs.LevelThreshold = int(float64(gs.LevelThreshold) * 1.5)
 			}
-		}
-
-		// Handle lane changing (Visuals + Logical X)
-		laneWidth := 80.0
-		tcSegment := gs.getSegmentAt(tc.Y)
-		leftEdge := -float64(tcSegment.StartLaneIndex) * laneWidth
-		
-		// Use steering-based physics for lane changes
-		if tc.TargetLane != 0 {
-			// We are changing lanes
-			
-			// 1. Calculate Target X (Center of Target Lane)
-			// Note: LaneWidth is constant 80.0.
-			// StartX of road is -StartLaneIndex * LaneWidth
-			targetLaneCenterX := leftEdge + float64(tc.TargetLane)*laneWidth + laneWidth/2
-			
-			// 2. Calculate Error (Distance to target)
-			errorX := targetLaneCenterX - tc.X
-			
-			// 3. PID Controller / Steering Logic
-			// P-Controller: Steering = Kp * Error
-			// We want smooth transition, so maybe just set a target VelocityX
-			
-			// Distance check to complete lane change
-			if math.Abs(errorX) < 5.0 {
-				// Close enough! Snap and finish.
-				tc.X = targetLaneCenterX
-				tc.Lane = tc.TargetLane
-				tc.TargetLane = 0
-				tc.LastLaneChangeTime = time.Now().UnixMilli()
-				tc.VelocityX *= 0.5 // Dampen residual lateral velocity
-				
-				// Safety check: Never allow traffic in lane 0
-				if tc.Lane < 1 {
-					tc.Lane = 1
-				}
-				
-				// Update TargetSpeed for new lane
-				speedLimitMPH := 50.0 + float64(tc.Lane)*10.0
-				tc.TargetSpeed = (speedLimitMPH - 5.0) / MPHPerPixelPerFrame
-			} else {
-				// Steer towards target
-				// Desired VelocityX is proportional to error, but clamped
-				// Smooth acceleration:
-				// Force = Kp * error - Kd * current_velocity
-				
-				kp := 0.05 // Proportional gain
-				kd := 0.1  // Damping gain
-				
-				targetAccelX := (errorX * kp) - (tc.VelocityX * kd)
-				
-				// Apply acceleration to velocity
-				tc.VelocityX += targetAccelX
-				
-				// Clamp max lateral speed for realism
-				maxLateralSpeed := 3.0
-				if tc.VelocityX > maxLateralSpeed { tc.VelocityX = maxLateralSpeed }
-				if tc.VelocityX < -maxLateralSpeed { tc.VelocityX = -maxLateralSpeed }
-			}
-			
-			// PRE-ACCELERATION: If moving to a faster lane (Target > Lane), update target speed early
-			// This prevents slowing down during the merge and causing collisions
-			if tc.TargetLane > tc.Lane {
-				speedLimitMPH := 50.0 + float64(tc.TargetLane)*10.0
-				newTargetSpeed := (speedLimitMPH - 5.0) / MPHPerPixelPerFrame
-				if tc.TargetSpeed < newTargetSpeed {
-					tc.TargetSpeed = newTargetSpeed
-				}
-			}
-			
-			// Update Logical X (tc.X is the source of truth now)
-			// Note: We previously used LaneProgress + Lerp. Now we use Physics X.
-			// We still need to update tc.X
-			tc.X += tc.VelocityX
-			
-		} else {
-			// Not changing lanes - Maintain Lane Center
-			// Target is center of current Lane
-			targetLaneCenterX := leftEdge + float64(tc.Lane)*laneWidth + laneWidth/2
-			
-			// Simple spring to center (to counter bounce/drift)
-			// But don't fight physics bounce too hard
-			errorX := targetLaneCenterX - tc.X
-			
-			// Only correct if significantly off-center or if velocity is low (drifting)
-			// Or just always apply weak spring
-			kp := 0.02
-			kd := 0.1
-			
-			targetAccelX := (errorX * kp) - (tc.VelocityX * kd)
-			tc.VelocityX += targetAccelX
-			
-			tc.X += tc.VelocityX
 		}
 
 		// Remove traffic that's too far off screen (beyond spawn range)
