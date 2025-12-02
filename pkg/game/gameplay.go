@@ -8,6 +8,8 @@ import (
 	"sync"
 	"time"
 
+	"github.com/golangdaddy/roadster/pkg/data"
+	"github.com/golangdaddy/roadster/pkg/models"
 	"github.com/golangdaddy/roadster/pkg/models/car"
 	"github.com/hajimehoshi/ebiten/v2"
 	"github.com/hajimehoshi/ebiten/v2/ebitenutil"
@@ -34,6 +36,8 @@ const (
 type TrafficCar struct {
 	X, Y         float64    // World position
 	VelocityY    float64    // Vertical velocity (current speed)
+	VelocityX    float64    // Horizontal velocity (physics/bounce)
+	PhysicsOffsetX float64  // DEPRECATED: Removed in favor of direct X physics
 	TargetSpeed  float64    // Desired speed (based on speed limit)
 	Acceleration float64    // Acceleration rate
 	Deceleration float64    // Deceleration/Braking rate
@@ -43,6 +47,13 @@ type TrafficCar struct {
 	Color        color.RGBA // Car color for variety
 	LastLaneChangeTime int64 // Timestamp of last lane change
 	Passed       bool // Whether the player has passed this car
+
+	// First-Class Object Fields
+	ID           string
+	DriverName   string
+	CarModel     *car.Car
+	Mass         float64
+	Headshot     *ebiten.Image // Pre-loaded headshot image
 }
 
 // PlayerPed represents the human character when on foot
@@ -91,12 +102,13 @@ func (tc *TrafficCar) Update(gs *GameplayScreen) {
 		
 		// If blocked ahead, try to force a lane change even if risky
 		if foundCarAhead && minDist < minTrafficDistance {
-			// Try ANY lane
+			// Try ANY lane (but never Lane 0)
 			if tc.Lane+1 < tcSegment.LaneCount && !rightLaneBlocked {
 				tc.TargetLane = tc.Lane + 1
 				tc.LaneProgress = 0.01
 				return
 			}
+			// CRITICAL: Ensure we don't move into Lane 0
 			if tc.Lane > 1 && !leftLaneBlocked {
 				tc.TargetLane = tc.Lane - 1
 				tc.LaneProgress = 0.01
@@ -392,7 +404,8 @@ func (tc *TrafficCar) Update(gs *GameplayScreen) {
 		if shouldMoveOverSlow && tc.Lane > 1 {
 			// Move to a slower lane (left) - this is mandatory for slow drivers
 			canLeft := !leftLaneBlocked
-			if canLeft {
+			// CRITICAL: Ensure we don't move into Lane 0
+			if canLeft && (tc.Lane-1) >= 1 {
 				tc.TargetLane = tc.Lane - 1
 				tc.LaneProgress = 0.01 // Start transition
 				return
@@ -418,7 +431,8 @@ func (tc *TrafficCar) Update(gs *GameplayScreen) {
 			// Move over logic (Move Left) - only if we aren't trying to overtake
 			if !foundCarAhead && tc.Lane > 1 {
 				canLeft := !leftLaneBlocked
-				if canLeft {
+				// CRITICAL: Ensure we don't move into Lane 0
+				if canLeft && (tc.Lane-1) >= 1 {
 					tc.TargetLane = tc.Lane - 1
 					tc.LaneProgress = 0.01 // Start transition
 					return
@@ -436,7 +450,8 @@ func (tc *TrafficCar) Update(gs *GameplayScreen) {
 			canLeft := !leftLaneBlocked
 			
 			// If clear, take it!
-			if canLeft {
+			// CRITICAL: Ensure we don't move into Lane 0
+			if canLeft && (tc.Lane-1) >= 1 {
 				// 5% chance per frame to actually initiate the move (makes it feel natural but persistent)
 				if rand.Float64() < 0.05 {
 					tc.TargetLane = tc.Lane - 1
@@ -528,6 +543,7 @@ type GameplayScreen struct {
 	FoodCapacity      float64 // Player food capacity (0-100 scale)
 	FoodLevel         float64 // Player food level (0-100 scale)
 	ToiletLevel       float64 // How full the player's bladder is (0-100 scale)
+	showDebug         bool    // Toggle for debug info overlay
 }
 
 // NewGameplayScreen creates a new gameplay screen
@@ -1023,12 +1039,18 @@ func (gs *GameplayScreen) updateAutoPilot(currentSegment RoadSegment, segmentIdx
 
 // Update handles gameplay logic
 func (gs *GameplayScreen) Update() error {
-	if inpututil.IsKeyJustPressed(ebiten.KeyEscape) {
+	// Toggle Debug/Profile View
+	if inpututil.IsKeyJustPressed(ebiten.KeyX) {
 		gs.paused = !gs.paused
-		return nil
+		gs.showDebug = !gs.showDebug // Assuming we reuse a debug flag or create a new one
 	}
 
 	if gs.paused {
+		if gs.showDebug {
+			// Just return nil to keep drawing the frozen frame with debug overlay
+			// We don't call updatePauseMenu here if it's the X-key pause
+			return nil 
+		}
 		return gs.updatePauseMenu()
 	}
 
@@ -2210,53 +2232,99 @@ func (gs *GameplayScreen) updateTraffic(scrollSpeed float64, currentSegment Road
 		tc.Update(gs)
 	}
 
-	// Second pass: Apply movement with collision prevention
+	// Second pass: Apply movement with physics-based collisions
 	for i := 0; i < len(gs.traffic); i++ {
 		tc := gs.traffic[i]
 
-		// Calculate desired new position
-		desiredY := tc.Y - tc.VelocityY
+		// 1. Apply Y Movement (Forward)
+		tc.Y -= tc.VelocityY
+		
+		// 2. Apply Physics X Movement (Bouncing/Sliding)
+		tc.PhysicsOffsetX += tc.VelocityX
+		// Friction/Decay for side movement
+		tc.VelocityX *= 0.9 
+		// Return to center force (decay offset) if not crashing constantly
+		if tc.LaneProgress == 0 {
+			tc.PhysicsOffsetX *= 0.95 
+		}
 
-		// Check for collisions with other cars in same lane or transitioning lanes
-		canMove := true
+		// 3. Collision Resolution
 		for j := 0; j < len(gs.traffic); j++ {
 			if i == j {
 				continue
 			}
-
 			other := gs.traffic[j]
-			// Check if other car is in same lane or transitioning to our lane
-			inSameLane := other.Lane == tc.Lane
-			transitioningToOurLane := (other.TargetLane == tc.Lane && other.LaneProgress > 0.5) ||
-				(tc.TargetLane == other.Lane && tc.LaneProgress > 0.5)
 
-			if inSameLane || transitioningToOurLane {
-				// Check if moving would cause collision
-				// Use a smaller collision box for movement to prevent "magnetic repulsion"
-				// effectively allowing closer following before hard stop
-				collisionDist := minTrafficDistance * 0.8 // Allow slightly closer than spawn distance
+			// Calculate distance
+			dx := tc.X - other.X
+			dy := tc.Y - other.Y
+			dist := math.Hypot(dx, dy)
+			
+			// Collision Radius (approx car length/width avg)
+			// Car is 40x64. Radius ~35?
+			minDist := 50.0 
+			
+			if dist < minDist {
+				// Collision!
 				
-				// If deadlocked (moving very slowly), allow even closer proximity to wiggle out
-				if tc.VelocityY < 1.0 {
-					collisionDist = minTrafficDistance * 0.5
-				}
-
-				if math.Abs(desiredY - other.Y) < collisionDist {
-					canMove = false
-					break
+				// Normalize collision normal
+				nx := dx / dist
+				ny := dy / dist
+				
+				// Relative velocity (v1 - v2)
+				// Velocity vectors: (Vx, -Vy) because Y decreases going up
+				v1x, v1y := tc.VelocityX, -tc.VelocityY
+				v2x, v2y := other.VelocityX, -other.VelocityY
+				
+				relVx := v1x - v2x
+				relVy := v1y - v2y
+				
+				// Dot product with normal (relative velocity along normal)
+				dot := relVx*nx + relVy*ny
+				
+				// Only bounce if moving towards each other (dot < 0)
+				if dot < 0 {
+					restitution := 0.5 // Bounciness
+					
+					// Impulse scalar
+					// j = -(1+e) * dot / (1/m1 + 1/m2)
+					m1 := tc.Mass
+					m2 := other.Mass
+					if m1 == 0 { m1 = 1200 } // Default mass safety
+					if m2 == 0 { m2 = 1200 }
+					
+					j := -(1 + restitution) * dot / (1/m1 + 1/m2)
+					
+					// Impulse vector
+					ix := j * nx
+					iy := j * ny
+					
+					// Apply velocity change
+					// v1 += I/m1
+					tc.VelocityX += ix / m1
+					// NewVy = OldVy - iy/m1 (because Vy is inverted stored velocity)
+					tc.VelocityY -= iy / m1
+					
+					other.VelocityX -= ix / m2
+					other.VelocityY += iy / m2
+					
+					// Positional Correction (Push apart to prevent sticking)
+					overlap := minDist - dist
+					percent := 0.5 // Split overlap
+					slop := 1.0 // Tolerance
+					
+					if overlap > slop {
+						correctionX := nx * overlap * percent
+						correctionY := ny * overlap * percent
+						
+						tc.PhysicsOffsetX += correctionX // Apply to offset for X
+						tc.Y += correctionY
+						
+						other.PhysicsOffsetX -= correctionX
+						other.Y -= correctionY
+					}
 				}
 			}
-		}
-
-		// Only move if no collision would occur
-		if canMove {
-			tc.Y = desiredY
-		} else {
-			// If we can't move forward, slow down significantly to prevent pile-ups
-			// More aggressive braking to prevent visual overlap
-			tc.VelocityY *= 0.5 // Was 0.7 - brake harder
-			// Apply some movement but much slower
-			tc.Y -= tc.VelocityY * 0.2 // Was 0.3
 		}
 
 		// Check if player has passed this car (overtaken)
@@ -2273,14 +2341,64 @@ func (gs *GameplayScreen) updateTraffic(scrollSpeed float64, currentSegment Road
 			}
 		}
 
-		// Handle lane changing
-		if tc.LaneProgress > 0 {
-			// Increment progress
-			tc.LaneProgress += 0.01 // Speed of lane change (slower/more gentle)
-			if tc.LaneProgress > 1.0 {
-				tc.LaneProgress = 1.0
+		// Handle lane changing (Visuals + Logical X)
+		laneWidth := 80.0
+		tcSegment := gs.getSegmentAt(tc.Y)
+		leftEdge := -float64(tcSegment.StartLaneIndex) * laneWidth
+		
+		// Use steering-based physics for lane changes
+		if tc.TargetLane != 0 {
+			// We are changing lanes
+			
+			// 1. Calculate Target X (Center of Target Lane)
+			// Note: LaneWidth is constant 80.0.
+			// StartX of road is -StartLaneIndex * LaneWidth
+			targetLaneCenterX := leftEdge + float64(tc.TargetLane)*laneWidth + laneWidth/2
+			
+			// 2. Calculate Error (Distance to target)
+			errorX := targetLaneCenterX - tc.X
+			
+			// 3. PID Controller / Steering Logic
+			// P-Controller: Steering = Kp * Error
+			// We want smooth transition, so maybe just set a target VelocityX
+			
+			// Distance check to complete lane change
+			if math.Abs(errorX) < 5.0 {
+				// Close enough! Snap and finish.
+				tc.X = targetLaneCenterX
+				tc.Lane = tc.TargetLane
+				tc.TargetLane = 0
+				tc.LastLaneChangeTime = time.Now().UnixMilli()
+				tc.VelocityX *= 0.5 // Dampen residual lateral velocity
+				
+				// Safety check: Never allow traffic in lane 0
+				if tc.Lane < 1 {
+					tc.Lane = 1
+				}
+				
+				// Update TargetSpeed for new lane
+				speedLimitMPH := 50.0 + float64(tc.Lane)*10.0
+				tc.TargetSpeed = (speedLimitMPH - 5.0) / MPHPerPixelPerFrame
+			} else {
+				// Steer towards target
+				// Desired VelocityX is proportional to error, but clamped
+				// Smooth acceleration:
+				// Force = Kp * error - Kd * current_velocity
+				
+				kp := 0.05 // Proportional gain
+				kd := 0.1  // Damping gain
+				
+				targetAccelX := (errorX * kp) - (tc.VelocityX * kd)
+				
+				// Apply acceleration to velocity
+				tc.VelocityX += targetAccelX
+				
+				// Clamp max lateral speed for realism
+				maxLateralSpeed := 3.0
+				if tc.VelocityX > maxLateralSpeed { tc.VelocityX = maxLateralSpeed }
+				if tc.VelocityX < -maxLateralSpeed { tc.VelocityX = -maxLateralSpeed }
 			}
-
+			
 			// PRE-ACCELERATION: If moving to a faster lane (Target > Lane), update target speed early
 			// This prevents slowing down during the merge and causing collisions
 			if tc.TargetLane > tc.Lane {
@@ -2290,34 +2408,30 @@ func (gs *GameplayScreen) updateTraffic(scrollSpeed float64, currentSegment Road
 					tc.TargetSpeed = newTargetSpeed
 				}
 			}
-
-			// Get traffic segment for accurate lane positioning
-			tcSegment := gs.getSegmentAt(tc.Y)
-
-			// Calculate positions
-			leftEdge := -float64(tcSegment.StartLaneIndex) * laneWidth
-			startX := leftEdge + float64(tc.Lane)*laneWidth + laneWidth/2
-			endX := leftEdge + float64(tc.TargetLane)*laneWidth + laneWidth/2
-
-			// Lerp X
-			tc.X = startX + (endX - startX) * tc.LaneProgress
-
-			// Complete transition
-			if tc.LaneProgress >= 1.0 {
-				tc.Lane = tc.TargetLane
-				tc.TargetLane = 0
-				tc.LaneProgress = 0
-				tc.LastLaneChangeTime = time.Now().UnixMilli()
-
-				// Safety check: Never allow traffic in lane 0
-				if tc.Lane < 1 {
-					tc.Lane = 1
-				}
-
-				// Update TargetSpeed for new lane (standard update)
-				speedLimitMPH := 50.0 + float64(tc.Lane)*10.0
-				tc.TargetSpeed = (speedLimitMPH - 5.0) / MPHPerPixelPerFrame
-			}
+			
+			// Update Logical X (tc.X is the source of truth now)
+			// Note: We previously used LaneProgress + Lerp. Now we use Physics X.
+			// We still need to update tc.X
+			tc.X += tc.VelocityX
+			
+		} else {
+			// Not changing lanes - Maintain Lane Center
+			// Target is center of current Lane
+			targetLaneCenterX := leftEdge + float64(tc.Lane)*laneWidth + laneWidth/2
+			
+			// Simple spring to center (to counter bounce/drift)
+			// But don't fight physics bounce too hard
+			errorX := targetLaneCenterX - tc.X
+			
+			// Only correct if significantly off-center or if velocity is low (drifting)
+			// Or just always apply weak spring
+			kp := 0.02
+			kd := 0.1
+			
+			targetAccelX := (errorX * kp) - (tc.VelocityX * kd)
+			tc.VelocityX += targetAccelX
+			
+			tc.X += tc.VelocityX
 		}
 
 		// Remove traffic that's too far off screen (beyond spawn range)
@@ -2507,18 +2621,89 @@ func (gs *GameplayScreen) spawnTrafficInDirection(segment RoadSegment, laneWidth
 		return
 	}
 
+	// Generate first-class car details based on lane
+	var allowedCategories []string
+	if lane <= 2 {
+		// Slower lanes: C1, C2
+		allowedCategories = []string{"C1", "C2"}
+	} else {
+		// Faster lanes: C3, C4, C5
+		allowedCategories = []string{"C3", "C4", "C5"}
+	}
+
+	carModel := models.CarInventory.GetRandomCarByCategory(allowedCategories)
+	
+	// Generate random name
+	nameList := data.CommonNames.Male
+	if rand.Float64() > 0.5 {
+		nameList = data.CommonNames.Female
+	}
+	driverName := nameList[rand.Intn(len(nameList))]
+	id := fmt.Sprintf("%s-%d", driverName, rand.Intn(1000))
+
+	// Calculate physics properties from car stats
+	// 0-60 mph time -> acceleration
+	// Acceleration = DeltaV / Time
+	// 60mph = 60 * MPHPerPixelPerFrame pixels/frame? No.
+	// 60mph in pixels/frame = 60 / MPHPerPixelPerFrame = 60 / 9.6 = 6.25
+	// Time is in seconds. Frames = seconds * 60.
+	// Accel = 6.25 / (Accel0to60 * 60)
+	accel := 0.05 // Default fallback
+	if carModel.Accel0to60 > 0 {
+		targetVel := 60.0 / MPHPerPixelPerFrame
+		frames := carModel.Accel0to60 * 60.0
+		accel = targetVel / frames
+	}
+
+	// Braking efficiency -> deceleration
+	// Base decel is around 0.1
+	decel := 0.1 * (carModel.BrakingEfficiency / 0.6) // Normalized against 0.6 efficiency
+
+	// Determine headshot image
+	// Assuming ID string starts with a name, we can deterministically pick an image or store it in struct
+	// Since we need to store the *ebiten.Image in the struct, let's load it now.
+	// To avoid repeated IO, we should probably have a cache, but for now let's pick deterministically from assets.
+	
+	// Map gender from name or just random? We used a name list.
+	// Let's assume we can infer or just pick randomly.
+	// Simple hash of ID to pick an image
+	hash := 0
+	for _, c := range id {
+		hash += int(c)
+	}
+	
+	headshotIdx := hash % 8 // 4 men + 4 women
+	var headshotPath string
+	if headshotIdx < 4 {
+		headshotPath = fmt.Sprintf("assets/characters/headshots/man%d_headshot.png", headshotIdx+1)
+	} else {
+		headshotPath = fmt.Sprintf("assets/characters/headshots/woman%d_headshot.png", (headshotIdx-4)+1)
+	}
+	
+	var headshotImg *ebiten.Image
+	if img, _, err := ebitenutil.NewImageFromFile(headshotPath); err == nil {
+		headshotImg = img
+	}
+
 	// Create new traffic car
 	newTraffic := &TrafficCar{
 		X:           laneCenterX,
 		Y:           spawnY,
 		VelocityY:   trafficVelocityY,
 		TargetSpeed: trafficVelocityY,
-		Acceleration: 0.05, // Same as player
-		Deceleration: 0.1,  // Better braking
+		Acceleration: accel,
+		Deceleration: decel,
 		Lane:        lane,
 		Color:       carColor,
 		Passed:      !ahead, // If spawned behind, it's already passed
 		LastLaneChangeTime: time.Now().UnixMilli(), // Initialize with spawn time
+		
+		// New fields
+		ID:         id,
+		DriverName: driverName,
+		CarModel:   carModel,
+		Mass:       carModel.Weight,
+		Headshot:   headshotImg,
 	}
 	
 	gs.trafficMutex.Lock()
@@ -2533,6 +2718,8 @@ func (gs *GameplayScreen) drawTraffic(screen *ebiten.Image) {
 	gs.trafficMutex.RLock()
 	defer gs.trafficMutex.RUnlock()
 	
+	face := text.NewGoXFace(bitmapfont.Face)
+
 	for _, tc := range gs.traffic {
 		// Calculate screen position relative to player car
 		// Center the traffic car vertically to match player car center logic
@@ -2665,9 +2852,65 @@ func (gs *GameplayScreen) drawTraffic(screen *ebiten.Image) {
 		op.GeoM.Translate(screenX, screenY)
 		screen.DrawImage(carImg, op)
 		
-		// Debug: Draw speed
-		speedMPH := tc.VelocityY * MPHPerPixelPerFrame
-		ebitenutil.DebugPrintAt(screen, fmt.Sprintf("%.0f", speedMPH), int(screenX), int(screenY)-15)
+		// Debug: Profile Info
+		if gs.showDebug && gs.paused {
+			// Draw Profile Box above car
+			boxW, boxH := 200, 80 // Increased size for headshot
+			boxImg := ebiten.NewImage(boxW, boxH)
+			boxImg.Fill(color.RGBA{0, 0, 0, 220}) // Darker background
+			
+			// Draw border
+			for i := 0; i < boxW; i++ {
+				boxImg.Set(i, 0, color.White)
+				boxImg.Set(i, boxH-1, color.White)
+			}
+			for i := 0; i < boxH; i++ {
+				boxImg.Set(0, i, color.White)
+				boxImg.Set(boxW-1, i, color.White)
+			}
+
+			// Draw Headshot (Left side)
+			if tc.Headshot != nil {
+				opH := &ebiten.DrawImageOptions{}
+				// Scale to fit 64x64 area (assuming headshots are 128x128 or similar)
+				scale := 64.0 / float64(tc.Headshot.Bounds().Dx())
+				opH.GeoM.Scale(scale, scale)
+				opH.GeoM.Translate(8, 8) // Padding
+				boxImg.DrawImage(tc.Headshot, opH)
+			} else {
+				// Placeholder rect
+				for y := 8; y < 72; y++ {
+					for x := 8; x < 72; x++ {
+						boxImg.Set(x, y, color.RGBA{50, 50, 50, 255})
+					}
+				}
+			}
+
+			boxOp := &ebiten.DrawImageOptions{}
+			// Position box to the right of the car
+			boxOp.GeoM.Translate(screenX + float64(carWidth) + 10, screenY - 30)
+			screen.DrawImage(boxImg, boxOp)
+
+			// Draw Info Text (Right side of headshot)
+			textOp := &text.DrawOptions{}
+			textOp.GeoM.Translate(screenX + float64(carWidth) + 10 + 80, screenY - 20) // Offset by box pos + headshot width
+			textOp.ColorScale.ScaleWithColor(color.White)
+			
+			// Check if CarModel is nil (shouldn't happen with new logic but safe check)
+			makeModel := "Unknown"
+			cat := "?"
+			if tc.CarModel != nil {
+				makeModel = fmt.Sprintf("%s %s", tc.CarModel.Make, tc.CarModel.Model)
+				cat = tc.CarModel.Category
+			}
+			
+			infoText := fmt.Sprintf("%s\n%s\nCat: %s", tc.DriverName, makeModel, cat)
+			text.Draw(screen, infoText, face, textOp)
+		} else {
+			// Standard debug speed
+			// speedMPH := tc.VelocityY * MPHPerPixelPerFrame
+			// ebitenutil.DebugPrintAt(screen, fmt.Sprintf("%.0f", speedMPH), int(screenX), int(screenY)-15)
+		}
 	}
 }
 

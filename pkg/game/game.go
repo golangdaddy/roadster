@@ -319,6 +319,11 @@ func NewGame() *Game {
 		log.Printf("Failed to load levels: %v", err)
 	}
 
+	// Load car inventory
+	if err := models.CarInventory.LoadInventory("assets/car_data.json"); err != nil {
+		log.Printf("Failed to load car inventory: %v", err)
+	}
+
 	return game
 }
 
