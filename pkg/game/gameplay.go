@@ -11,11 +11,11 @@ import (
 	"github.com/golangdaddy/roadster/pkg/data"
 	"github.com/golangdaddy/roadster/pkg/models"
 	"github.com/golangdaddy/roadster/pkg/models/car"
+	"github.com/hajimehoshi/bitmapfont/v4"
 	"github.com/hajimehoshi/ebiten/v2"
 	"github.com/hajimehoshi/ebiten/v2/ebitenutil"
 	"github.com/hajimehoshi/ebiten/v2/inpututil"
 	"github.com/hajimehoshi/ebiten/v2/text/v2"
-	"github.com/hajimehoshi/bitmapfont/v4"
 )
 
 // MPHPerPixelPerFrame is the conversion factor from pixels per frame to MPH
@@ -26,42 +26,42 @@ const MPHPerPixelPerFrame = 9.6
 
 // Traffic constants
 const (
-	minTrafficDistance     = 150.0 // Minimum distance between traffic vehicles in pixels
-	trafficVariation       = 0.2   // 20% random variation on distance
-	trafficSpawnRange      = 1600.0 // Range ahead/behind player to spawn traffic (decreased from 6000)
-	trafficSpawnProbability = 0.105 // Chance to spawn a car for a lane/direction (30% reduction from 0.15)
+	minTrafficDistance      = 150.0  // Minimum distance between traffic vehicles in pixels
+	trafficVariation        = 0.2    // 20% random variation on distance
+	trafficSpawnRange       = 1600.0 // Range ahead/behind player to spawn traffic (decreased from 6000)
+	trafficSpawnProbability = 0.105  // Chance to spawn a car for a lane/direction (30% reduction from 0.15)
 )
 
 // TrafficCar represents a traffic vehicle
 type TrafficCar struct {
-	X, Y         float64    // World position
-	VelocityY    float64    // Vertical velocity (current speed)
-	VelocityX    float64    // Horizontal velocity (physics/bounce)
-	SteeringAngle float64   // Steering angle (-1.0 to 1.0)
-	PhysicsOffsetX float64  // DEPRECATED: Removed in favor of direct X physics
-	TargetSpeed  float64    // Desired speed (based on speed limit)
-	Acceleration float64    // Acceleration rate
-	Deceleration float64    // Deceleration/Braking rate
-	Lane         int        // Which lane this car is in
-	TargetLane   int        // Lane moving towards (if changing)
-	LaneProgress float64    // 0.0 to 1.0 for visual transition
-	Color        color.RGBA // Car color for variety
-	LastLaneChangeTime int64 // Timestamp of last lane change
-	Passed       bool // Whether the player has passed this car
+	X, Y               float64    // World position
+	VelocityY          float64    // Vertical velocity (current speed)
+	VelocityX          float64    // Horizontal velocity (physics/bounce)
+	SteeringAngle      float64    // Steering angle (-1.0 to 1.0)
+	PhysicsOffsetX     float64    // DEPRECATED: Removed in favor of direct X physics
+	TargetSpeed        float64    // Desired speed (based on speed limit)
+	Acceleration       float64    // Acceleration rate
+	Deceleration       float64    // Deceleration/Braking rate
+	Lane               int        // Which lane this car is in
+	TargetLane         int        // Lane moving towards (if changing)
+	LaneProgress       float64    // 0.0 to 1.0 for visual transition
+	Color              color.RGBA // Car color for variety
+	LastLaneChangeTime int64      // Timestamp of last lane change
+	Passed             bool       // Whether the player has passed this car
 
 	// First-Class Object Fields
-	ID           string
-	DriverName   string
-	CarModel     *car.Car
-	Mass         float64
-	Headshot     *ebiten.Image // Pre-loaded headshot image
+	ID         string
+	DriverName string
+	CarModel   *car.Car
+	Mass       float64
+	Headshot   *ebiten.Image // Pre-loaded headshot image
 }
 
 // PlayerPed represents the human character when on foot
 type PlayerPed struct {
-	X, Y      float64
-	Speed     float64
-	Sprite    *ebiten.Image
+	X, Y   float64
+	Speed  float64
+	Sprite *ebiten.Image
 }
 
 // PhysicsUpdate handles the physics simulation for the traffic car (movement, steering)
@@ -71,12 +71,12 @@ func (tc *TrafficCar) PhysicsUpdate(gs *GameplayScreen) {
 	tc.Y -= tc.VelocityY
 
 	// 2. Apply X Movement (Steering + Physics)
-	
+
 	// Get segment info for lane positioning
 	tcSegment := gs.getSegmentAt(tc.Y)
 	laneWidth := 80.0
 	leftEdge := -float64(tcSegment.StartLaneIndex) * laneWidth
-	
+
 	// Determine Target X
 	var targetX float64
 	if tc.TargetLane != 0 {
@@ -86,10 +86,10 @@ func (tc *TrafficCar) PhysicsUpdate(gs *GameplayScreen) {
 		// Staying in lane
 		targetX = leftEdge + float64(tc.Lane)*laneWidth + laneWidth/2
 	}
-	
+
 	// Calculate Error
 	errorX := targetX - tc.X
-	
+
 	// Complete lane change if close enough
 	if tc.TargetLane != 0 && math.Abs(errorX) < 5.0 {
 		tc.X = targetX
@@ -98,12 +98,12 @@ func (tc *TrafficCar) PhysicsUpdate(gs *GameplayScreen) {
 		tc.LastLaneChangeTime = time.Now().UnixMilli()
 		tc.VelocityX *= 0.5 // Dampen residual velocity
 		tc.SteeringAngle = 0
-		
+
 		// Safety check: Never allow traffic in lane 0
 		if tc.Lane < 1 {
 			tc.Lane = 1
 		}
-		
+
 		// Update TargetSpeed for new lane
 		speedLimitMPH := 50.0 + float64(tc.Lane)*10.0
 		tc.TargetSpeed = (speedLimitMPH - 5.0) / MPHPerPixelPerFrame
@@ -112,33 +112,37 @@ func (tc *TrafficCar) PhysicsUpdate(gs *GameplayScreen) {
 		// P-Controller for steering angle
 		kp := 0.002 // Sensitivity
 		// kd := 0.1   // Damping (unused in simple logic)
-		
+
 		// Target steering angle based on error
 		targetSteer := errorX * kp
-		
+
 		// Apply damping based on current lateral velocity (counter-steer to stabilize)
 		targetSteer -= tc.VelocityX * 0.05
-		
+
 		// Smoothly interpolate steering angle (simulating wheel turn speed)
 		steerResponse := 0.1
 		tc.SteeringAngle += (targetSteer - tc.SteeringAngle) * steerResponse
-		
+
 		// Clamp steering
-		if tc.SteeringAngle > 1.0 { tc.SteeringAngle = 1.0 }
-		if tc.SteeringAngle < -1.0 { tc.SteeringAngle = -1.0 }
-		
+		if tc.SteeringAngle > 1.0 {
+			tc.SteeringAngle = 1.0
+		}
+		if tc.SteeringAngle < -1.0 {
+			tc.SteeringAngle = -1.0
+		}
+
 		// Apply Steering Force to VelocityX
 		// Force = SteeringAngle * Grip * SpeedFactor
 		// Cars turn better at speed (up to a point)
-		speedFactor := math.Min(tc.VelocityY / 5.0, 1.0) + 0.2 // Minimal turning at 0 speed
-		turnSpeed := 0.5 // Lateral acceleration power
-		
+		speedFactor := math.Min(tc.VelocityY/5.0, 1.0) + 0.2 // Minimal turning at 0 speed
+		turnSpeed := 0.5                                     // Lateral acceleration power
+
 		tc.VelocityX += tc.SteeringAngle * turnSpeed * speedFactor
-		
+
 		// Apply Friction/Drag to VelocityX
 		tc.VelocityX *= 0.92
 	}
-	
+
 	// Integrate X Position
 	tc.X += tc.VelocityX
 }
@@ -148,33 +152,33 @@ func (tc *TrafficCar) PhysicsUpdate(gs *GameplayScreen) {
 func (tc *TrafficCar) SanityCheck(gs *GameplayScreen) bool {
 	// 1. Check if off-screen (handled in updateTraffic loop, but good to double check)
 	// This is mainly for logic safety
-	
+
 	// 2. Check for valid road surface
 	// If we are not changing lanes, we must be within the road bounds
 	// If we are changing lanes, we might be between valid bounds if the road widens/narrows, but we should generally be safe.
 	// The critical check requested is: "destroy the vehicle based on a check to see if the car is even driving on legal road area"
-	
+
 	// Calculate legal bounds
 	tcSegment := gs.getSegmentAt(tc.Y)
 	laneWidth := 80.0
 	leftEdge := -float64(tcSegment.StartLaneIndex) * laneWidth
 	rightEdge := leftEdge + float64(tcSegment.LaneCount)*laneWidth
-	
+
 	// Allow some tolerance for visual overhang (half car width + buffer)
 	tolerance := 30.0
-	
+
 	if tc.X < leftEdge-tolerance || tc.X > rightEdge+tolerance {
 		// Car is driving on grass/void!
 		// Check if it's just transitioning?
 		// If LaneProgress > 0, we might be moving to a valid lane.
 		// But if we are physically outside, it's bad.
-		
+
 		// Exception: Transitioning INTO a new lane that starts here (on-ramp)
 		// Or OUT of a lane that ended.
-		
+
 		return false // Destroy immediately
 	}
-	
+
 	return true
 }
 
@@ -198,11 +202,11 @@ func (tc *TrafficCar) Update(gs *GameplayScreen) {
 	minDist := 10000.0
 	foundCarAhead := false
 	speedOfCarAhead := 0.0
-	
+
 	minDistBehind := 10000.0
 	foundCarBehind := false
 	speedOfCarBehind := 0.0
-	
+
 	rightLaneBlocked := false
 	leftLaneBlocked := false
 
@@ -214,7 +218,7 @@ func (tc *TrafficCar) Update(gs *GameplayScreen) {
 	if tc.VelocityY < 1.0 {
 		// If stuck for more than 3 seconds (assuming 60fps, simple counter approach needed or timestamp)
 		// Simplified approach: if stopped and blocked, try desperate maneuvers
-		
+
 		// If blocked ahead, try to force a lane change even if risky
 		if foundCarAhead && minDist < minTrafficDistance {
 			// Try ANY lane (but never Lane 0)
@@ -229,7 +233,7 @@ func (tc *TrafficCar) Update(gs *GameplayScreen) {
 				tc.LaneProgress = 0.01
 				return
 			}
-			
+
 			// If completely stuck (blocked ahead and sides), gradually despawn if off-screen or far behind player
 			// Or just ghost through if really stuck?
 			// Let's just aggressively reduce collision box for movement if stuck
@@ -295,25 +299,25 @@ func (tc *TrafficCar) Update(gs *GameplayScreen) {
 
 	// Check against player
 	laneWidth := 80.0
-	
+
 	// Check if player blocks adjacent lanes for lane changing
 	// Calculate player's lane index relative to traffic's current segment
 	// tcSegment is already calculated above
 	segLeftEdge := -float64(tcSegment.StartLaneIndex) * laneWidth
 	playerLane := int((gs.playerCar.X - segLeftEdge) / laneWidth)
-	
+
 	// Check if player is close enough to block a lane change
-	if math.Abs(tc.Y - gs.playerCar.Y) < minTrafficDistance*2.0 {
-		if playerLane == tc.Lane + 1 {
+	if math.Abs(tc.Y-gs.playerCar.Y) < minTrafficDistance*2.0 {
+		if playerLane == tc.Lane+1 {
 			rightLaneBlocked = true
 		}
-		if playerLane == tc.Lane - 1 {
+		if playerLane == tc.Lane-1 {
 			leftLaneBlocked = true
 		}
 	}
 
 	// Simple lane check based on X distance
-	if math.Abs(gs.playerCar.X - tc.X) < laneWidth/2 {
+	if math.Abs(gs.playerCar.X-tc.X) < laneWidth/2 {
 		// Player is in roughly the same lane
 		if gs.playerCar.Y < tc.Y {
 			// Player ahead of this traffic car
@@ -357,7 +361,7 @@ func (tc *TrafficCar) Update(gs *GameplayScreen) {
 	if foundCarAhead && minDist < safeDistance {
 		// Match the car ahead
 		tc.TargetSpeed = speedOfCarAhead
-		
+
 		// If the car ahead is moving VERY slowly or we are too close, brake harder
 		if minDist < minTrafficDistance {
 			tc.TargetSpeed = speedOfCarAhead * 0.85
@@ -365,68 +369,68 @@ func (tc *TrafficCar) Update(gs *GameplayScreen) {
 		if minDist < minTrafficDistance*0.5 {
 			tc.TargetSpeed = speedOfCarAhead * 0.6
 		}
-		
+
 		// AGGRESSIVE OVERTAKING: If stuck behind a slower car, increase urge to change lanes
 		// Especially if we are in a fast lane
-		if tc.Lane > 1 && speedOfCarAhead < baseTargetSpeed * 0.8 {
+		if tc.Lane > 1 && speedOfCarAhead < baseTargetSpeed*0.8 {
 			// Force a lane change attempt (ignore random chance)
 			shouldMoveOver = true
 		}
 	}
 
 	// VIGILANT: If a faster car is approaching from behind, slow down slightly to help them pass
-	if foundCarBehind && minDistBehind < 300 && speedOfCarBehind > tc.VelocityY * 1.2 {
+	if foundCarBehind && minDistBehind < 300 && speedOfCarBehind > tc.VelocityY*1.2 {
 		// Reduce speed by 10% to facilitate overtaking
 		tc.TargetSpeed = tc.VelocityY * 0.9
 	}
 
 	// Apply Physics (harmonised with player AI)
-	if math.Abs(tc.VelocityY - tc.TargetSpeed) < 0.1 {
+	if math.Abs(tc.VelocityY-tc.TargetSpeed) < 0.1 {
 		tc.VelocityY = tc.TargetSpeed
 	} else if tc.VelocityY < tc.TargetSpeed {
 		// Accelerate
 		// BOOST acceleration if significantly under target speed to reach it faster
 		acceleration := tc.Acceleration
-		if tc.TargetSpeed - tc.VelocityY > 2.0 { // More than ~20mph difference
+		if tc.TargetSpeed-tc.VelocityY > 2.0 { // More than ~20mph difference
 			acceleration *= 2.0 // Double acceleration to catch up
 		}
-		
+
 		tc.VelocityY += acceleration
 		if tc.VelocityY > tc.TargetSpeed {
 			tc.VelocityY = tc.TargetSpeed
 		}
 	} else if tc.VelocityY > tc.TargetSpeed {
 		// Decelerate/Brake
-		
+
 		// SAFETY CHECK: Don't brake if we are changing lanes to a faster lane
 		// This prevents cars from slowing down right as they enter a fast lane, causing collisions
 		isChangingToFasterLane := tc.LaneProgress > 0 && tc.TargetLane > tc.Lane
-		
+
 		if !isChangingToFasterLane {
 			// Use Deceleration rate, boost if we need to brake hard (target is much lower)
 			brakeForce := tc.Deceleration
-			if tc.TargetSpeed < tc.VelocityY * 0.5 {
+			if tc.TargetSpeed < tc.VelocityY*0.5 {
 				brakeForce *= 2.0 // Emergency braking
 			}
-			
+
 			tc.VelocityY -= brakeForce
 			if tc.VelocityY < tc.TargetSpeed {
 				tc.VelocityY = tc.TargetSpeed
 			}
 		}
 	}
-	
+
 	// Ensure non-negative speed
 	if tc.VelocityY < 0 {
 		tc.VelocityY = 0
 	}
-	
+
 	// VIGILANT LANE CHANGE: Move out of the way for faster cars approaching from behind
 	// shouldMoveOver is already initialized above
 	if foundCarBehind && minDistBehind < 400 {
 		// A car is approaching from behind
 		// Check if it's significantly faster (more than 20% faster)
-		if speedOfCarBehind > tc.VelocityY * 1.2 {
+		if speedOfCarBehind > tc.VelocityY*1.2 {
 			shouldMoveOver = true
 		}
 	}
@@ -443,7 +447,7 @@ func (tc *TrafficCar) Update(gs *GameplayScreen) {
 	// LANE MERGE LOGIC
 	// Check if our current lane is ending in the next segment (merging)
 	// This is a critical check to prevent driving on grass/off-road
-	
+
 	// Only check if not already changing lanes
 	if tc.LaneProgress == 0 && tc.TargetLane == 0 {
 		// Look ahead distance (based on speed, but at least 800px)
@@ -451,36 +455,36 @@ func (tc *TrafficCar) Update(gs *GameplayScreen) {
 		if lookAheadDist < 800 {
 			lookAheadDist = 800
 		}
-		
+
 		// Check the segment ahead
 		nextY := tc.Y - lookAheadDist
 		currentSegment := gs.getSegmentAt(tc.Y)
 		nextSegment := gs.getSegmentAt(nextY)
-		
+
 		// If segments are different, check lane validity
 		if currentSegment.Y != nextSegment.Y {
 			// Calculate effective lane index in next segment
 			currentAbsLane := tc.Lane + currentSegment.StartLaneIndex
 			nextStartLaneIdx := nextSegment.StartLaneIndex
 			nextEndLaneIdx := nextStartLaneIdx + nextSegment.LaneCount - 1
-			
+
 			// Check if our lane exists in the next segment
 			laneExists := currentAbsLane >= nextStartLaneIdx && currentAbsLane <= nextEndLaneIdx
-			
+
 			if !laneExists {
 				// Lane ends! Must merge immediately.
-				
+
 				// OFFSCREEN CHECK: If car is significantly offscreen (behind or far ahead), just destroy it
 				// This saves processing and avoids glitches with cars stuck in void
 				// Also catches cars that failed to merge and drove off the end of the lane into the "void"
 				// If we are past the end of the lane (Y < nextSegment.Y) and still here, destroy.
 				distFromPlayer := tc.Y - gs.playerCar.Y
 				isOffScreen := math.Abs(distFromPlayer) > 800
-				
+
 				if isOffScreen || (tc.Y < nextSegment.Y && !laneExists) {
 					// We are either offscreen OR we have driven past the valid road segment for our lane
 					// Destroy to prevent driving on grass
-					tc.Y = 1000000 
+					tc.Y = 1000000
 					return
 				}
 
@@ -491,13 +495,13 @@ func (tc *TrafficCar) Update(gs *GameplayScreen) {
 					// Check if merge is possible (Lane validity handled below)
 					// We only check merge possibility here if we are about to force a merge
 					// But here we just need to stop if we are about to run out of road
-					
+
 					// Calculate how much road is left before the segment ends
 					distToSegmentEnd := tc.Y - nextSegment.Y // Approximately
 					if distToSegmentEnd < 200 {
 						// Getting close to the end of the lane
 						// Check if we can merge safely
-						
+
 						// Try left merge
 						canMergeLeft := currentAbsLane > nextEndLaneIdx
 						if canMergeLeft {
@@ -508,7 +512,7 @@ func (tc *TrafficCar) Update(gs *GameplayScreen) {
 								return
 							}
 						}
-						
+
 						// Try right merge
 						canMergeRight := currentAbsLane < nextStartLaneIdx
 						if canMergeRight {
@@ -524,7 +528,7 @@ func (tc *TrafficCar) Update(gs *GameplayScreen) {
 
 				// Decide which way to merge based on where the road went
 				currentTime := time.Now().UnixMilli()
-				
+
 				// If we are to the LEFT of the new start (road moved right) -> Merge Right
 				if currentAbsLane < nextStartLaneIdx {
 					// Force merge right
@@ -534,7 +538,7 @@ func (tc *TrafficCar) Update(gs *GameplayScreen) {
 					tc.LastLaneChangeTime = currentTime // Reset cooldown
 					return
 				}
-				
+
 				// If we are to the RIGHT of the new end (road moved left) -> Merge Left
 				if currentAbsLane > nextEndLaneIdx {
 					// Force merge left
@@ -575,7 +579,7 @@ func (tc *TrafficCar) Update(gs *GameplayScreen) {
 		if shouldMoveOver {
 			// If we are the slow one blocking, move left
 			// If we are stuck behind a slow one, move right (overtake)
-			
+
 			// Overtake logic (Move Right)
 			if foundCarAhead && tc.Lane+1 < segment.LaneCount {
 				canRight := !rightLaneBlocked
@@ -585,7 +589,7 @@ func (tc *TrafficCar) Update(gs *GameplayScreen) {
 					return
 				}
 			}
-			
+
 			// Move over logic (Move Left) - only if we aren't trying to overtake
 			if !foundCarAhead && tc.Lane > 1 {
 				canLeft := !leftLaneBlocked
@@ -601,12 +605,12 @@ func (tc *TrafficCar) Update(gs *GameplayScreen) {
 		// LIFECYCLE: Keep Right / Move to Slower Lane
 		// After 20 seconds (cooldown), try to move to a slower lane (Left, Lane-1)
 		// Only allow moving to faster lanes (Right) if stuck or evading
-		
+
 		// Always try to move left (slower) if possible and safe
 		if tc.Lane > 1 {
 			// Check if the slower lane (Left, Lane-1) is clear
 			canLeft := !leftLaneBlocked
-			
+
 			// If clear, take it!
 			// CRITICAL: Ensure we don't move into Lane 0
 			if canLeft && (tc.Lane-1) >= 1 {
@@ -622,7 +626,7 @@ func (tc *TrafficCar) Update(gs *GameplayScreen) {
 		// Overtaking (Right/Faster Lane) - ONLY if stuck behind a slow car
 		if foundCarAhead && tc.Lane+1 < segment.LaneCount {
 			// Only overtake if the car ahead is significantly slower
-			if speedOfCarAhead < tc.TargetSpeed * 0.9 {
+			if speedOfCarAhead < tc.TargetSpeed*0.9 {
 				canRight := !rightLaneBlocked
 				if canRight {
 					// 2% chance to overtake (reluctant to move to fast lane)
@@ -657,89 +661,89 @@ type PetrolStation struct {
 }
 
 type Billboard struct {
-	X, Y float64
-	Text string
+	X, Y         float64
+	Text         string
 	DistanceText string
 }
 
 // GameplayScreen represents the main driving gameplay
 type GameplayScreen struct {
-	roadSegments []RoadSegment
-	petrolStations []PetrolStation
-	billboards     []Billboard
-	playerCar    *Car
-	traffic      []*TrafficCar // Traffic vehicles
-	trafficMutex sync.RWMutex  // Mutex for safe concurrent access to traffic
-	scrollSpeed  float64
-	roadTextures map[string]*ebiten.Image
-	screenWidth  int
-	screenHeight int
-	cameraX      float64 // Camera X offset to follow car
-	cameraY      float64 // Camera Y offset to follow target
-	onGameEnd    func() // Callback when game ends
-	levelData    *LevelData // Store level data for reset
-	initialX     float64   // Initial player X position
-	initialY     float64   // Initial player Y position
-	backgroundPattern *ebiten.Image // Repeating background pattern
-	lastSpawnTime int64 // Timestamp of last spawn attempt
-	spawnCooldown int64 // Minimum time between spawn attempts (in milliseconds)
-	DistanceTravelled float64 // Total miles travelled
-	TotalCarsPassed   int     // Total number of cars passed
-	Level             int     // Current player level
-	LevelThreshold    int     // Total cars needed to reach next level
-	PrevLevelThreshold int    // Total cars needed to reach current level (for progress bar)
-	paused            bool
-	onFoot            bool
-	playerPed         *PlayerPed
-	autoDrive         bool  // Auto-pilot mode
-	autoDriveLane     int   // Target lane for auto-pilot
-	lastAutoDriveLaneChange int64 // Timestamp of last auto-drive lane change
-	Crashes           int     // Total number of crashes
-	lastCrashTime     int64   // Timestamp of last crash (for debounce)
-	SleepCapacity     float64 // Player sleep capacity (0-100 scale)
-	SleepLevel        float64 // Player sleep level (0-100 scale)
-	FoodCapacity      float64 // Player food capacity (0-100 scale)
-	FoodLevel         float64 // Player food level (0-100 scale)
-	ToiletLevel       float64 // How full the player's bladder is (0-100 scale)
-	showDebug         bool    // Toggle for debug info overlay
+	roadSegments            []RoadSegment
+	petrolStations          []PetrolStation
+	billboards              []Billboard
+	playerCar               *Car
+	traffic                 []*TrafficCar // Traffic vehicles
+	trafficMutex            sync.RWMutex  // Mutex for safe concurrent access to traffic
+	scrollSpeed             float64
+	roadTextures            map[string]*ebiten.Image
+	screenWidth             int
+	screenHeight            int
+	cameraX                 float64       // Camera X offset to follow car
+	cameraY                 float64       // Camera Y offset to follow target
+	onGameEnd               func()        // Callback when game ends
+	levelData               *LevelData    // Store level data for reset
+	initialX                float64       // Initial player X position
+	initialY                float64       // Initial player Y position
+	backgroundPattern       *ebiten.Image // Repeating background pattern
+	lastSpawnTime           int64         // Timestamp of last spawn attempt
+	spawnCooldown           int64         // Minimum time between spawn attempts (in milliseconds)
+	DistanceTravelled       float64       // Total miles travelled
+	TotalCarsPassed         int           // Total number of cars passed
+	Level                   int           // Current player level
+	LevelThreshold          int           // Total cars needed to reach next level
+	PrevLevelThreshold      int           // Total cars needed to reach current level (for progress bar)
+	paused                  bool
+	onFoot                  bool
+	playerPed               *PlayerPed
+	autoDrive               bool    // Auto-pilot mode
+	autoDriveLane           int     // Target lane for auto-pilot
+	lastAutoDriveLaneChange int64   // Timestamp of last auto-drive lane change
+	Crashes                 int     // Total number of crashes
+	lastCrashTime           int64   // Timestamp of last crash (for debounce)
+	SleepCapacity           float64 // Player sleep capacity (0-100 scale)
+	SleepLevel              float64 // Player sleep level (0-100 scale)
+	FoodCapacity            float64 // Player food capacity (0-100 scale)
+	FoodLevel               float64 // Player food level (0-100 scale)
+	ToiletLevel             float64 // How full the player's bladder is (0-100 scale)
+	showDebug               bool    // Toggle for debug info overlay
 }
 
 // NewGameplayScreen creates a new gameplay screen
 func NewGameplayScreen(selectedCar *car.Car, levelData *LevelData, onGameEnd func()) *GameplayScreen {
 	gs := &GameplayScreen{
-		roadSegments: make([]RoadSegment, 0),
-		petrolStations: make([]PetrolStation, 0),
-		billboards:   make([]Billboard, 0),
-		traffic:      make([]*TrafficCar, 0),
-		scrollSpeed:  2.0,
-		roadTextures: make(map[string]*ebiten.Image),
-		screenWidth:  1024,
-		screenHeight: 600,
-		onGameEnd:    onGameEnd,
-		lastSpawnTime: time.Now().UnixMilli(),
-		spawnCooldown: 215 + rand.Int63n(143), // 215-358ms random cooldown (30% reduction in spawn frequency)
-		DistanceTravelled: 0,
-		TotalCarsPassed:   0,
-		Level:             1,
-		LevelThreshold:    172, // Start with 172 cars to level up (matches config)
+		roadSegments:       make([]RoadSegment, 0),
+		petrolStations:     make([]PetrolStation, 0),
+		billboards:         make([]Billboard, 0),
+		traffic:            make([]*TrafficCar, 0),
+		scrollSpeed:        2.0,
+		roadTextures:       make(map[string]*ebiten.Image),
+		screenWidth:        1024,
+		screenHeight:       600,
+		onGameEnd:          onGameEnd,
+		lastSpawnTime:      time.Now().UnixMilli(),
+		spawnCooldown:      215 + rand.Int63n(143), // 215-358ms random cooldown (30% reduction in spawn frequency)
+		DistanceTravelled:  0,
+		TotalCarsPassed:    0,
+		Level:              1,
+		LevelThreshold:     172, // Start with 172 cars to level up (matches config)
 		PrevLevelThreshold: 0,
-		Crashes:           0,
-		lastCrashTime:     0,
-		SleepCapacity:     100.0,
-		SleepLevel:        100.0, // Start well-rested
-		FoodCapacity:      100.0,
-		FoodLevel:         100.0, // Start full
-		ToiletLevel:       0.0,   // Start with empty bladder
+		Crashes:            0,
+		lastCrashTime:      0,
+		SleepCapacity:      100.0,
+		SleepLevel:         100.0, // Start well-rested
+		FoodCapacity:       100.0,
+		FoodLevel:          100.0, // Start full
+		ToiletLevel:        0.0,   // Start with empty bladder
 	}
 
 	// Initialize player car
 	laneWidth := 80.0
 	initialX := laneWidth / 2 // Start in center of starting lane (world X = 40)
 	initialY := float64(gs.screenHeight) - 100
-	
+
 	gs.cameraX = initialX - float64(gs.screenWidth)/2
 	gs.cameraY = initialY - float64(gs.screenHeight)/2
-	
+
 	gs.playerCar = &Car{
 		X:                initialX,
 		Y:                initialY,
@@ -803,16 +807,16 @@ func (gs *GameplayScreen) generateRoadFromLevel(levelData *LevelData) {
 	segmentHeight := 600.0 // Height of each road segment in world space (600px as specified)
 
 	y := float64(gs.screenHeight) // Start from bottom of screen
-	
+
 	// First pass: Generate segments and find petrol stations
 	for i, segment := range levelData.Segments {
 		// Start with only 1 lane for the first few segments
 		laneCount := segment.LaneCount
 		roadTypes := segment.RoadTypes
 		lanePositions := segment.LanePositions
-		
+
 		startLaneIdx := segment.StartLaneIndex
-		
+
 		if i < 3 { // First 3 segments are always 1 lane
 			laneCount = 1
 			// Use only the starting lane's road type and position
@@ -837,14 +841,14 @@ func (gs *GameplayScreen) generateRoadFromLevel(levelData *LevelData) {
 			StartLaneIndex: startLaneIdx,
 			Y:              y,
 		}
-		
+
 		// Check for Petrol Station (Road Type F)
 		laneWidth := 80.0
 		for laneIdx, rt := range roadTypes {
 			if rt == "F" {
 				leftEdge := -float64(startLaneIdx) * laneWidth
 				laneX := leftEdge + float64(laneIdx)*laneWidth + laneWidth/2
-				
+
 				station := PetrolStation{
 					X:    laneX - 100,
 					Y:    y - segmentHeight/2,
@@ -889,9 +893,9 @@ func (gs *GameplayScreen) generateRoadFromLevel(levelData *LevelData) {
 			leftEdge1 := -float64(seg1.StartLaneIndex) * 80.0
 
 			gs.billboards = append(gs.billboards, Billboard{
-				X: leftEdge1 - 120, // Left of road
-				Y: billboard1Y,
-				Text: "SERVICES",
+				X:            leftEdge1 - 120, // Left of road
+				Y:            billboard1Y,
+				Text:         "SERVICES",
 				DistanceText: "1 MILE",
 			})
 		}
@@ -901,9 +905,9 @@ func (gs *GameplayScreen) generateRoadFromLevel(levelData *LevelData) {
 			leftEdge05 := -float64(seg05.StartLaneIndex) * 80.0
 
 			gs.billboards = append(gs.billboards, Billboard{
-				X: leftEdge05 - 120, // Left of road
-				Y: billboard05Y,
-				Text: "SERVICES",
+				X:            leftEdge05 - 120, // Left of road
+				Y:            billboard05Y,
+				Text:         "SERVICES",
 				DistanceText: "1/2 MILE",
 			})
 		}
@@ -955,8 +959,12 @@ func (gs *GameplayScreen) updateAutoPilot(currentSegment RoadSegment, segmentIdx
 	progress := 0.0
 	if segmentIdx < len(gs.roadSegments)-1 {
 		progress = (currentSegment.Y - gs.playerCar.Y) / 600.0
-		if progress < 0 { progress = 0 }
-		if progress > 1 { progress = 1 }
+		if progress < 0 {
+			progress = 0
+		}
+		if progress > 1 {
+			progress = 1
+		}
 	}
 
 	// 1. Determine target lane position (and interpolated bounds)
@@ -973,7 +981,7 @@ func (gs *GameplayScreen) updateAutoPilot(currentSegment RoadSegment, segmentIdx
 
 		boundRight = boundRight + (nextRight-boundRight)*progress
 		boundLeft = boundLeft + (nextLeft-boundLeft)*progress
-		
+
 		// PREDICTIVE LANE CHECK:
 		// If the current lane will not exist in the next segment (lane count decreasing),
 		// or if we need to move into a new lane (on-ramp), we need to act early.
@@ -983,15 +991,15 @@ func (gs *GameplayScreen) updateAutoPilot(currentSegment RoadSegment, segmentIdx
 			// Check if our current lane index is valid in the NEXT segment
 			// We need to map current lane index to absolute position, then to next segment index
 			// Simplified: Just check relative indices if alignment is standard
-			
+
 			// Check if our target lane is valid in next segment
 			nextStartLaneIdx := nextSegment.StartLaneIndex
 			currentStartLaneIdx := currentSegment.StartLaneIndex
-			
+
 			// Calculate effective lane index in next segment
 			// Absolute Lane Index = Relative Index + Start Index
 			currentAbsLane := gs.autoDriveLane + currentStartLaneIdx
-			
+
 			// Check if this absolute lane exists in next segment
 			// Next segment has lanes from nextStartLaneIdx to nextStartLaneIdx + nextLaneCount
 			if currentAbsLane < nextStartLaneIdx {
@@ -999,7 +1007,7 @@ func (gs *GameplayScreen) updateAutoPilot(currentSegment RoadSegment, segmentIdx
 				gs.autoDriveLane++
 				laneChanged = true
 				gs.lastAutoDriveLaneChange = time.Now().UnixMilli() // Reset cooldown to allow chain moves
-			} else if currentAbsLane >= nextStartLaneIdx + nextSegment.LaneCount {
+			} else if currentAbsLane >= nextStartLaneIdx+nextSegment.LaneCount {
 				// Lane ends on the right (road shifts left) - Force move Left
 				gs.autoDriveLane--
 				laneChanged = true
@@ -1039,7 +1047,7 @@ func (gs *GameplayScreen) updateAutoPilot(currentSegment RoadSegment, segmentIdx
 
 	// 2. Check for obstacles in current target lane
 	collisionRisk := false
-	minDist := 800.0 // Look ahead distance for awareness
+	minDist := 800.0           // Look ahead distance for awareness
 	closeObstacleDist := 400.0 // Distance that actually requires speed reduction
 
 	gs.trafficMutex.RLock()
@@ -1077,13 +1085,13 @@ func (gs *GameplayScreen) updateAutoPilot(currentSegment RoadSegment, segmentIdx
 		// Ensure we don't drive on the non-existent part of a ramp
 		if laneIdx >= 0 && laneIdx < len(currentSegment.RoadTypes) {
 			rType := currentSegment.RoadTypes[laneIdx]
-			
+
 			// On-ramps (Opening lanes): "D" (Right Widen), "B" (Layby Start/Left Widen)
 			// These lanes are physically blocked at start and open up
 			if rType == "D" || rType == "B" {
 				// Allow entry immediately (0.0) to match "1 segment before" behavior request
 				// Physics bounds (interpolated above) will handle the "clipping" check
-				// if progress < 0.3 { return false } 
+				// if progress < 0.3 { return false }
 			}
 
 			// Off-ramps (Closing lanes): "E" (Left Merge/Right Narrow), "C" (Layby End/Left Merge)
@@ -1134,7 +1142,7 @@ func (gs *GameplayScreen) updateAutoPilot(currentSegment RoadSegment, segmentIdx
 		if !laneChanged && collisionRisk && minDist < 200 {
 			// Move left (to a slower lane) as emergency measure
 			if gs.autoDriveLane == rightmostLane && gs.autoDriveLane > 0 &&
-			   checkAvailability(gs.autoDriveLane-1) && gs.isLaneClear(gs.autoDriveLane-1, currentSegment, laneWidth) {
+				checkAvailability(gs.autoDriveLane-1) && gs.isLaneClear(gs.autoDriveLane-1, currentSegment, laneWidth) {
 				gs.autoDriveLane--
 				laneChanged = true
 				gs.lastAutoDriveLaneChange = now
@@ -1207,7 +1215,7 @@ func (gs *GameplayScreen) Update() error {
 		if gs.showDebug {
 			// Just return nil to keep drawing the frozen frame with debug overlay
 			// We don't call updatePauseMenu here if it's the X-key pause
-			return nil 
+			return nil
 		}
 		return gs.updatePauseMenu()
 	}
@@ -1333,13 +1341,13 @@ func (gs *GameplayScreen) Update() error {
 
 		referenceMaxSpeed := 100.0 / MPHPerPixelPerFrame
 		speedFactor := gs.playerCar.VelocityY / referenceMaxSpeed
-		
+
 		// Calculate target lateral velocity based on steering angle
 		targetVelocityX := gs.playerCar.SteeringAngle * gs.playerCar.TurnSpeed * speedFactor
-		
+
 		// Apply "grip" or inertia: Interpolate current VelocityX towards target
 		// Lower grip factor = more drift/slide (0.0 = ice, 1.0 = instant turn)
-		gripFactor := 0.2 
+		gripFactor := 0.2
 		gs.playerCar.VelocityX += (targetVelocityX - gs.playerCar.VelocityX) * gripFactor
 	}
 
@@ -1350,22 +1358,26 @@ func (gs *GameplayScreen) Update() error {
 	// Calculate the road boundaries based on current segment with interpolation for ramps
 	leftEdge := -float64(currentSegment.StartLaneIndex) * laneWidth
 	rightEdge := leftEdge + float64(currentSegment.LaneCount)*laneWidth
-	
+
 	// Interpolate with NEXT segment to match visual ramp ahead
 	if segmentIdx < len(gs.roadSegments)-1 {
 		nextSegment := gs.roadSegments[segmentIdx+1]
-		
+
 		// Calculate next segment bounds
 		nextLeftEdge := -float64(nextSegment.StartLaneIndex) * laneWidth
 		nextRightEdge := nextLeftEdge + float64(nextSegment.LaneCount)*laneWidth
-		
+
 		// Calculate progress in current segment (0.0 at bottom/start, 1.0 at top/end)
 		progress := (currentSegment.Y - gs.playerCar.Y) / 600.0
-		if progress < 0 { progress = 0 }
-		if progress > 1 { progress = 1 }
-		
-		leftEdge = leftEdge + (nextLeftEdge - leftEdge) * progress
-		rightEdge = rightEdge + (nextRightEdge - rightEdge) * progress
+		if progress < 0 {
+			progress = 0
+		}
+		if progress > 1 {
+			progress = 1
+		}
+
+		leftEdge = leftEdge + (nextLeftEdge-leftEdge)*progress
+		rightEdge = rightEdge + (nextRightEdge-rightEdge)*progress
 	}
 
 	// Check for nearby petrol stations to expand bounds (ALLOW ENTRY)
@@ -1395,7 +1407,7 @@ func (gs *GameplayScreen) Update() error {
 		targetX = gs.playerPed.X
 	}
 	gs.cameraX = targetX - float64(gs.screenWidth)/2
-	
+
 	targetY := gs.playerCar.Y
 	if gs.onFoot && gs.playerPed != nil {
 		targetY = gs.playerPed.Y
@@ -1408,10 +1420,10 @@ func (gs *GameplayScreen) Update() error {
 	// MPH = Miles per Hour. At 60 FPS: Miles per Frame = MPH / 216000
 	currentSpeedMPH := gs.playerCar.VelocityY * MPHPerPixelPerFrame
 	gs.DistanceTravelled += currentSpeedMPH / 216000.0
-	
+
 	// Consume fuel based on speed
 	// Base burn + speed factor (Tuned for ~5 mins driving)
-	fuelBurn := 0.0002 + gs.playerCar.VelocityY * 0.0003
+	fuelBurn := 0.0002 + gs.playerCar.VelocityY*0.0003
 	if gs.playerCar.SelectedCar.FuelLevel > 0 {
 		gs.playerCar.SelectedCar.FuelLevel -= fuelBurn
 		if gs.playerCar.SelectedCar.FuelLevel < 0 {
@@ -1420,7 +1432,7 @@ func (gs *GameplayScreen) Update() error {
 	}
 
 	// Consume sleep (slower than fuel)
-	sleepBurn := 0.0001 + gs.playerCar.VelocityY * 0.00005
+	sleepBurn := 0.0001 + gs.playerCar.VelocityY*0.00005
 	if gs.SleepLevel > 0 {
 		gs.SleepLevel -= sleepBurn
 		if gs.SleepLevel < 0 {
@@ -1429,7 +1441,7 @@ func (gs *GameplayScreen) Update() error {
 	}
 
 	// Consume food
-	foodBurn := 0.00015 + gs.playerCar.VelocityY * 0.00008
+	foodBurn := 0.00015 + gs.playerCar.VelocityY*0.00008
 	if gs.FoodLevel > 0 {
 		gs.FoodLevel -= foodBurn
 		if gs.FoodLevel < 0 {
@@ -1438,7 +1450,7 @@ func (gs *GameplayScreen) Update() error {
 	}
 
 	// Fill toilet (bladder fills up over time)
-	toiletFill := 0.0003 + gs.playerCar.VelocityY * 0.0001
+	toiletFill := 0.0003 + gs.playerCar.VelocityY*0.0001
 	gs.ToiletLevel += toiletFill
 	if gs.ToiletLevel > 100.0 {
 		gs.ToiletLevel = 100.0
@@ -1446,10 +1458,10 @@ func (gs *GameplayScreen) Update() error {
 
 	// Scroll the road (move road downward to create forward movement illusion)
 	scrollSpeed := gs.playerCar.VelocityY
-	
+
 	// Update car position (car moves upward toward top of screen)
 	gs.playerCar.Y -= scrollSpeed
-	
+
 	// Update traffic
 	gs.updateTraffic(scrollSpeed, currentSegment, laneWidth)
 
@@ -1458,10 +1470,10 @@ func (gs *GameplayScreen) Update() error {
 		// Crash handling
 		now := time.Now().UnixMilli()
 		// Debounce: only count crash every 1 second to prevent rapid incrementing during sustained contact
-		if now - gs.lastCrashTime > 1000 {
+		if now-gs.lastCrashTime > 1000 {
 			gs.Crashes++
 			gs.lastCrashTime = now
-			
+
 			// Game Over check
 			if gs.Crashes >= 10 {
 				if gs.onGameEnd != nil {
@@ -1469,7 +1481,7 @@ func (gs *GameplayScreen) Update() error {
 				}
 			}
 		}
-		
+
 		// Bounce back effect (simple)
 		gs.playerCar.VelocityY *= -0.5
 		gs.playerCar.VelocityX *= -0.5
@@ -1480,20 +1492,20 @@ func (gs *GameplayScreen) Update() error {
 	// Since we have a finite number of segments pre-generated, we can just keep them all.
 	// The draw function handles culling off-screen segments efficiently.
 	/*
-	for i := 0; i < len(gs.roadSegments); i++ {
-		segment := gs.roadSegments[i]
-		screenY := segment.Y - gs.playerCar.Y + float64(gs.screenHeight)/2
-		
-		// Drawing code draws if: -600 <= screenY <= screenHeight
-		// Only remove if completely off-screen with buffer
-		if (screenY + 600) < -100 || screenY > float64(gs.screenHeight)+100 {
-			gs.roadSegments = append(gs.roadSegments[:i], gs.roadSegments[i+1:]...)
-			i-- // Adjust index after removal
-		} else {
-			// Segments are ordered, so once we find one that's still visible, we can stop
-			break
+		for i := 0; i < len(gs.roadSegments); i++ {
+			segment := gs.roadSegments[i]
+			screenY := segment.Y - gs.playerCar.Y + float64(gs.screenHeight)/2
+
+			// Drawing code draws if: -600 <= screenY <= screenHeight
+			// Only remove if completely off-screen with buffer
+			if (screenY + 600) < -100 || screenY > float64(gs.screenHeight)+100 {
+				gs.roadSegments = append(gs.roadSegments[:i], gs.roadSegments[i+1:]...)
+				i-- // Adjust index after removal
+			} else {
+				// Segments are ordered, so once we find one that's still visible, we can stop
+				break
+			}
 		}
-	}
 	*/
 
 	// All segments are pre-generated from level data, no dynamic addition needed
@@ -1536,7 +1548,7 @@ func (gs *GameplayScreen) Draw(screen *ebiten.Image) {
 	gs.drawPetrolStationTarmac(screen)
 	gs.drawRoad(screen)
 	gs.drawPetrolStations(screen)
-	
+
 	// Draw billboards
 	gs.drawBillboards(screen)
 
@@ -1552,7 +1564,7 @@ func (gs *GameplayScreen) Draw(screen *ebiten.Image) {
 
 	// Draw UI overlay
 	gs.drawUI(screen)
-	
+
 	// Draw pause menu on top
 	if gs.paused {
 		gs.drawPauseMenu(screen)
@@ -1612,7 +1624,7 @@ func (gs *GameplayScreen) drawRoadSegment(screen *ebiten.Image, segment RoadSegm
 
 	// Calculate road dimensions based on lanes
 	laneWidth := 80.0 // Width of each lane in pixels
-	
+
 	// Position road so that the starting lane stays in the same world position
 	// The starting lane (index segment.StartLaneIndex) should have its center at world X = 40
 	// So the left edge of the starting lane is at world X = 0
@@ -1684,13 +1696,13 @@ func (gs *GameplayScreen) generateBackgroundPattern() {
 		cx := rand.Intn(patternSize)
 		cy := rand.Intn(patternSize)
 		radius := rand.Intn(30) + 10
-		
+
 		// Shade variation
 		shade := rand.Intn(40) - 20
-		
-		r := uint8(math.Min(255, math.Max(0, float64(baseR + shade))))
-		g := uint8(math.Min(255, math.Max(0, float64(baseG + shade))))
-		b := uint8(math.Min(255, math.Max(0, float64(baseB + shade))))
+
+		r := uint8(math.Min(255, math.Max(0, float64(baseR+shade))))
+		g := uint8(math.Min(255, math.Max(0, float64(baseG+shade))))
+		b := uint8(math.Min(255, math.Max(0, float64(baseB+shade))))
 		col := color.RGBA{r, g, b, 255}
 
 		// Draw circular patch (wrapping)
@@ -1709,7 +1721,7 @@ func (gs *GameplayScreen) generateBackgroundPattern() {
 	for i := 0; i < 1000; i++ {
 		x := rand.Intn(patternSize)
 		y := rand.Intn(patternSize)
-		
+
 		if rand.Float64() < 0.5 {
 			// Dark
 			pattern.Set(x, y, color.RGBA{20, 100, 20, 255})
@@ -1726,32 +1738,32 @@ func (gs *GameplayScreen) generateBackgroundPattern() {
 func (gs *GameplayScreen) drawTreeToPattern(pattern *ebiten.Image, x, y float64, seed int) {
 	treeWidth := 30
 	treeHeight := 50
-	
+
 	screenX := int(x)
 	screenY := int(y)
-	
+
 	// Skip if out of bounds
-	if screenX < 0 || screenX+treeWidth > pattern.Bounds().Dx() || 
-	   screenY < 0 || screenY+treeHeight > pattern.Bounds().Dy() {
+	if screenX < 0 || screenX+treeWidth > pattern.Bounds().Dx() ||
+		screenY < 0 || screenY+treeHeight > pattern.Bounds().Dy() {
 		return
 	}
-	
+
 	// Tree trunk (brown)
 	trunkColor := color.RGBA{101, 67, 33, 255}
 	trunkWidth := 6
 	trunkHeight := 15
 	trunkX := screenX + treeWidth/2 - trunkWidth/2
 	trunkY := screenY + treeHeight - trunkHeight
-	
+
 	for ty := 0; ty < trunkHeight; ty++ {
 		for tx := 0; tx < trunkWidth; tx++ {
 			if trunkX+tx >= 0 && trunkX+tx < pattern.Bounds().Dx() &&
-			   trunkY+ty >= 0 && trunkY+ty < pattern.Bounds().Dy() {
+				trunkY+ty >= 0 && trunkY+ty < pattern.Bounds().Dy() {
 				pattern.Set(trunkX+tx, trunkY+ty, trunkColor)
 			}
 		}
 	}
-	
+
 	// Tree foliage (simple circle)
 	foliageColors := []color.RGBA{
 		{34, 139, 34, 255},
@@ -1764,11 +1776,11 @@ func (gs *GameplayScreen) drawTreeToPattern(pattern *ebiten.Image, x, y float64,
 		positiveSeed = -positiveSeed
 	}
 	foliageColor := foliageColors[positiveSeed%len(foliageColors)]
-	
+
 	foliageCenterX := screenX + treeWidth/2
 	foliageCenterY := screenY + treeHeight/2
 	radius := 15
-	
+
 	for dy := -radius; dy <= radius; dy++ {
 		for dx := -radius; dx <= radius; dx++ {
 			if dx*dx+dy*dy <= radius*radius {
@@ -1782,19 +1794,17 @@ func (gs *GameplayScreen) drawTreeToPattern(pattern *ebiten.Image, x, y float64,
 	}
 }
 
-
 // drawDecorativeLayer draws the repeating background pattern with trees positioned relative to road
 func (gs *GameplayScreen) drawDecorativeLayer(screen *ebiten.Image, segment RoadSegment, screenY float64, roadX float64, laneWidth float64) {
 	if gs.backgroundPattern == nil {
 		return
 	}
-	
+
 	segmentHeight := 600.0
 	totalRoadWidth := float64(segment.LaneCount) * laneWidth
 	leftGrassStart := roadX
 	rightGrassEnd := roadX + totalRoadWidth
-	
-	
+
 	// Draw trees positioned relative to the road (not at screen edges)
 	// Use segment Y as seed for consistent tree placement
 	segmentYInt := int(segment.Y)
@@ -1802,13 +1812,13 @@ func (gs *GameplayScreen) drawDecorativeLayer(screen *ebiten.Image, segment Road
 		segmentYInt = -segmentYInt
 	}
 	segmentSeed := segmentYInt % 1000
-	
+
 	// Draw trees on left side of road
 	leftTreeX := leftGrassStart - 60.0
 	if leftTreeX > -100 && leftTreeX < float64(gs.screenWidth)+100 {
 		gs.drawTreesToScreen(screen, leftTreeX, screenY, segmentHeight, segmentSeed)
 	}
-	
+
 	// Draw trees on right side of road
 	rightTreeX := rightGrassEnd + 20.0
 	if rightTreeX > -100 && rightTreeX < float64(gs.screenWidth)+100 {
@@ -1819,17 +1829,17 @@ func (gs *GameplayScreen) drawDecorativeLayer(screen *ebiten.Image, segment Road
 // drawTreesToScreen draws trees at a specific X position along the segment
 func (gs *GameplayScreen) drawTreesToScreen(screen *ebiten.Image, x float64, y float64, height float64, seed int) {
 	treeSpacing := 150.0
-	numTrees := int(height / treeSpacing) + 1
-	
+	numTrees := int(height/treeSpacing) + 1
+
 	// Ensure seed is positive
 	positiveSeed := seed
 	if positiveSeed < 0 {
 		positiveSeed = -positiveSeed
 	}
-	
+
 	for i := 0; i < numTrees; i++ {
 		treeY := y + float64(i)*treeSpacing + float64(positiveSeed%50)
-		
+
 		// Only draw if on screen
 		if treeY > -50 && treeY < float64(gs.screenHeight)+50 {
 			treeSeed := positiveSeed + i*17
@@ -1842,32 +1852,32 @@ func (gs *GameplayScreen) drawTreesToScreen(screen *ebiten.Image, x float64, y f
 func (gs *GameplayScreen) drawTreeToScreen(screen *ebiten.Image, x, y float64, seed int) {
 	treeWidth := 30
 	treeHeight := 50
-	
+
 	screenX := int(x)
 	screenY := int(y)
-	
+
 	// Skip if completely off screen
 	if screenX+treeWidth < 0 || screenX > gs.screenWidth || screenY+treeHeight < 0 || screenY > gs.screenHeight {
 		return
 	}
-	
+
 	// Create tree sprite
 	treeImg := ebiten.NewImage(treeWidth, treeHeight)
-	
+
 	// Tree trunk (brown)
 	trunkColor := color.RGBA{101, 67, 33, 255}
 	trunkWidth := 6
 	trunkHeight := 15
 	trunkX := treeWidth/2 - trunkWidth/2
 	trunkY := treeHeight - trunkHeight
-	
+
 	// Draw trunk
 	for ty := 0; ty < trunkHeight; ty++ {
 		for tx := 0; tx < trunkWidth; tx++ {
 			treeImg.Set(trunkX+tx, trunkY+ty, trunkColor)
 		}
 	}
-	
+
 	// Tree foliage (green, varies by seed)
 	foliageColors := []color.RGBA{
 		{34, 139, 34, 255},
@@ -1880,11 +1890,11 @@ func (gs *GameplayScreen) drawTreeToScreen(screen *ebiten.Image, x, y float64, s
 		positiveSeed = -positiveSeed
 	}
 	foliageColor := foliageColors[positiveSeed%len(foliageColors)]
-	
+
 	foliageCenterX := treeWidth / 2
 	foliageCenterY := treeHeight / 2
 	radius := 15
-	
+
 	// Draw foliage circle
 	for dy := -radius; dy <= radius; dy++ {
 		for dx := -radius; dx <= radius; dx++ {
@@ -1897,7 +1907,7 @@ func (gs *GameplayScreen) drawTreeToScreen(screen *ebiten.Image, x, y float64, s
 			}
 		}
 	}
-	
+
 	// Draw tree to screen
 	op := &ebiten.DrawImageOptions{}
 	op.GeoM.Translate(float64(screenX), float64(screenY))
@@ -1907,17 +1917,17 @@ func (gs *GameplayScreen) drawTreeToScreen(screen *ebiten.Image, x, y float64, s
 // drawTrees draws a row of trees
 func (gs *GameplayScreen) drawTrees(screen *ebiten.Image, x float64, y float64, height float64, seed int, leftSide bool) {
 	treeSpacing := 120.0
-	numTrees := int(height / treeSpacing) + 1
-	
+	numTrees := int(height/treeSpacing) + 1
+
 	// Ensure seed is positive for modulo operations
 	positiveSeed := seed
 	if positiveSeed < 0 {
 		positiveSeed = -positiveSeed
 	}
-	
+
 	for i := 0; i < numTrees; i++ {
 		treeY := y + float64(i)*treeSpacing + float64(positiveSeed%50)
-		
+
 		// Only draw if on screen
 		if treeY > -50 && treeY < float64(gs.screenHeight)+50 {
 			treeSeed := positiveSeed + i*17
@@ -1930,39 +1940,39 @@ func (gs *GameplayScreen) drawTrees(screen *ebiten.Image, x float64, y float64, 
 func (gs *GameplayScreen) drawTree(screen *ebiten.Image, x, y float64, seed int, leftSide bool) {
 	treeWidth := 40
 	treeHeight := 60
-	
+
 	// Convert to integer screen coordinates
 	screenX := int(x)
 	screenY := int(y)
-	
+
 	// Skip if completely off screen
 	if screenX+treeWidth < 0 || screenX > gs.screenWidth || screenY+treeHeight < 0 || screenY > gs.screenHeight {
 		return
 	}
-	
+
 	// Create tree sprite on offscreen image to avoid glitching
 	treeImg := ebiten.NewImage(treeWidth, treeHeight)
-	
+
 	// Tree trunk (brown)
 	trunkColor := color.RGBA{101, 67, 33, 255}
 	trunkWidth := 8
 	trunkHeight := 20
 	trunkX := treeWidth/2 - trunkWidth/2
 	trunkY := treeHeight - trunkHeight
-	
+
 	// Draw trunk
 	for ty := 0; ty < trunkHeight; ty++ {
 		for tx := 0; tx < trunkWidth; tx++ {
 			treeImg.Set(trunkX+tx, trunkY+ty, trunkColor)
 		}
 	}
-	
+
 	// Tree foliage (green, varies by seed)
 	foliageColors := []color.RGBA{
-		{34, 139, 34, 255},   // Forest green
-		{0, 128, 0, 255},     // Green
-		{50, 150, 50, 255},   // Light green
-		{20, 100, 20, 255},   // Dark green
+		{34, 139, 34, 255}, // Forest green
+		{0, 128, 0, 255},   // Green
+		{50, 150, 50, 255}, // Light green
+		{20, 100, 20, 255}, // Dark green
 	}
 	// Ensure seed is positive for array indexing
 	positiveSeed := seed
@@ -1970,11 +1980,11 @@ func (gs *GameplayScreen) drawTree(screen *ebiten.Image, x, y float64, seed int,
 		positiveSeed = -positiveSeed
 	}
 	foliageColor := foliageColors[positiveSeed%len(foliageColors)]
-	
+
 	// Draw foliage as overlapping circles
 	foliageCenterX := treeWidth / 2
 	foliageCenterY := treeHeight / 2
-	
+
 	// Main foliage circle
 	radius := 18
 	for dy := -radius; dy <= radius; dy++ {
@@ -1988,7 +1998,7 @@ func (gs *GameplayScreen) drawTree(screen *ebiten.Image, x, y float64, seed int,
 			}
 		}
 	}
-	
+
 	// Smaller circles for depth
 	smallRadius := 12
 	for _, offset := range []struct{ x, y int }{{-8, -5}, {8, -5}, {0, 8}} {
@@ -2011,13 +2021,12 @@ func (gs *GameplayScreen) drawTree(screen *ebiten.Image, x, y float64, seed int,
 			}
 		}
 	}
-	
+
 	// Draw tree sprite to screen
 	op := &ebiten.DrawImageOptions{}
 	op.GeoM.Translate(float64(screenX), float64(screenY))
 	screen.DrawImage(treeImg, op)
 }
-
 
 // drawCar renders the player's car
 func (gs *GameplayScreen) drawCar(screen *ebiten.Image) {
@@ -2128,16 +2137,16 @@ func (gs *GameplayScreen) drawCar(screen *ebiten.Image) {
 
 	// Apply rotation based on steering angle
 	op := &ebiten.DrawImageOptions{}
-	
+
 	// Rotate car sprite based on steering angle (subtle rotation)
-	rotationAngle := gs.playerCar.SteeringAngle * 0.15 // Max 15 degrees rotation
+	rotationAngle := gs.playerCar.SteeringAngle * 0.15             // Max 15 degrees rotation
 	op.GeoM.Translate(-float64(carWidth)/2, -float64(carHeight)/2) // Center rotation
 	op.GeoM.Rotate(rotationAngle)
 	op.GeoM.Translate(float64(carWidth)/2, float64(carHeight)/2)
-	
+
 	op.GeoM.Translate(screenX, screenY)
 	screen.DrawImage(carImg, op)
-	
+
 	// Draw steering wheel indicator in bottom-right corner
 	gs.drawSteeringIndicator(screen)
 }
@@ -2148,11 +2157,11 @@ func (gs *GameplayScreen) drawSteeringIndicator(screen *ebiten.Image) {
 	centerX := float64(gs.screenWidth - 80)
 	centerY := float64(gs.screenHeight - 80)
 	radius := 30.0
-	
+
 	// Draw steering wheel circle (gray)
 	wheelImg := ebiten.NewImage(70, 70)
 	wheelColor := color.RGBA{100, 100, 100, 255}
-	
+
 	// Draw circle outline
 	for angle := 0.0; angle < 6.28; angle += 0.1 {
 		x := 35 + int(radius*math.Cos(angle))
@@ -2165,7 +2174,7 @@ func (gs *GameplayScreen) drawSteeringIndicator(screen *ebiten.Image) {
 			}
 		}
 	}
-	
+
 	// Draw center mark
 	centerColor := color.RGBA{200, 200, 200, 255}
 	for dy := -3; dy <= 3; dy++ {
@@ -2173,7 +2182,7 @@ func (gs *GameplayScreen) drawSteeringIndicator(screen *ebiten.Image) {
 			wheelImg.Set(35+dx, 35+dy, centerColor)
 		}
 	}
-	
+
 	// Draw steering indicator line (red when turned, green when centered)
 	var indicatorColor color.RGBA
 	if gs.playerCar.SteeringAngle > 0.1 || gs.playerCar.SteeringAngle < -0.1 {
@@ -2181,13 +2190,13 @@ func (gs *GameplayScreen) drawSteeringIndicator(screen *ebiten.Image) {
 	} else {
 		indicatorColor = color.RGBA{50, 255, 50, 255} // Green when centered
 	}
-	
+
 	// Draw line from center at steering angle
 	lineAngle := gs.playerCar.SteeringAngle * 1.57 // 90 degrees max rotation
 	lineLength := radius - 5
 	endX := 35 + int(lineLength*math.Sin(lineAngle))
 	endY := 35 - int(lineLength*math.Cos(lineAngle))
-	
+
 	// Draw thick line
 	for t := 0.0; t <= 1.0; t += 0.02 {
 		x := 35 + int(float64(endX-35)*t)
@@ -2200,11 +2209,11 @@ func (gs *GameplayScreen) drawSteeringIndicator(screen *ebiten.Image) {
 			}
 		}
 	}
-	
+
 	op := &ebiten.DrawImageOptions{}
 	op.GeoM.Translate(centerX-35, centerY-35)
 	screen.DrawImage(wheelImg, op)
-	
+
 	// Draw text label
 	label := fmt.Sprintf("Steering: %.1f", gs.playerCar.SteeringAngle)
 	ebitenutil.DebugPrintAt(screen, label, gs.screenWidth-150, gs.screenHeight-25)
@@ -2226,7 +2235,7 @@ func (gs *GameplayScreen) getCurrentRoadSegment() (RoadSegment, int) {
 	if len(gs.roadSegments) > 0 {
 		lastIdx := len(gs.roadSegments) - 1
 		lastSegment := gs.roadSegments[lastIdx]
-		if carWorldY <= lastSegment.Y - 600 {
+		if carWorldY <= lastSegment.Y-600 {
 			// Player is beyond the last segment - use the last segment as reference
 			return lastSegment, lastIdx
 		}
@@ -2286,34 +2295,34 @@ func (gs *GameplayScreen) checkCollisions() bool {
 	// Actual car size is 40x64, but we'll use smaller collision boxes
 	collisionWidth := 30.0  // Smaller than 40px car width
 	collisionHeight := 50.0 // Smaller than 64px car height
-	
+
 	// Player car is drawn at fixed screen position (screenHeight - 150 = 450)
 	// Traffic cars are drawn at: screenY = tc.Y - gs.playerCar.Y + screenHeight/2
 	// For collision at same screen Y: 450 = tc.Y - gs.playerCar.Y + 300
 	// Therefore: tc.Y = gs.playerCar.Y + 150
 	// We need to check if traffic Y is within collisionHeight of this position
-	
+
 	// Player car world X position (using smaller collision box)
 	playerLeft := gs.playerCar.X - collisionWidth/2
 	playerRight := gs.playerCar.X + collisionWidth/2
-	
+
 	// Player car's effective world Y for collision
 	// Both player and traffic use the same world coordinate system
 	playerCollisionY := gs.playerCar.Y
 	playerYTop := playerCollisionY - collisionHeight/2
 	playerYBottom := playerCollisionY + collisionHeight/2
-	
+
 	// Check collision with each traffic vehicle
 	gs.trafficMutex.RLock()
 	for _, tc := range gs.traffic {
 		// Traffic car world X position (using smaller collision box)
 		trafficLeft := tc.X - collisionWidth/2
 		trafficRight := tc.X + collisionWidth/2
-		
+
 		// Traffic car world Y bounding box (using smaller collision box)
 		trafficYTop := tc.Y - collisionHeight/2
 		trafficYBottom := tc.Y + collisionHeight/2
-		
+
 		// Check X overlap
 		if playerLeft < trafficRight && playerRight > trafficLeft {
 			// Check Y overlap (traffic bounding box overlaps with player collision range)
@@ -2324,7 +2333,7 @@ func (gs *GameplayScreen) checkCollisions() bool {
 		}
 	}
 	gs.trafficMutex.RUnlock()
-	
+
 	return false
 }
 
@@ -2332,7 +2341,7 @@ func (gs *GameplayScreen) checkCollisions() bool {
 func (gs *GameplayScreen) getSegmentAtY(y float64) RoadSegment {
 	// Segments are ordered by decreasing Y
 	for _, segment := range gs.roadSegments {
-		if y <= segment.Y && y > segment.Y - 600 {
+		if y <= segment.Y && y > segment.Y-600 {
 			return segment
 		}
 	}
@@ -2355,7 +2364,7 @@ func (gs *GameplayScreen) resetToStart() {
 
 	// Clear all traffic
 	gs.cleanupTraffic()
-	
+
 	// Reset crash counter
 	gs.Crashes = 0
 
@@ -2416,64 +2425,68 @@ func (gs *GameplayScreen) updateTraffic(scrollSpeed float64, currentSegment Road
 			dx := tc.X - other.X
 			dy := tc.Y - other.Y
 			dist := math.Hypot(dx, dy)
-			
+
 			// Collision Radius (approx car length/width avg)
-			minDist := 50.0 
-			
+			minDist := 50.0
+
 			if dist < minDist {
 				// Collision!
-				
+
 				// Normalize collision normal
 				nx := dx / dist
 				ny := dy / dist
-				
+
 				// Relative velocity (v1 - v2)
 				// Velocity vectors: (Vx, -Vy) because Y decreases going up
 				v1x, v1y := tc.VelocityX, -tc.VelocityY
 				v2x, v2y := other.VelocityX, -other.VelocityY
-				
+
 				relVx := v1x - v2x
 				relVy := v1y - v2y
-				
+
 				// Dot product with normal (relative velocity along normal)
 				dot := relVx*nx + relVy*ny
-				
+
 				// Only bounce if moving towards each other (dot < 0)
 				if dot < 0 {
 					restitution := 0.5 // Bounciness
-					
+
 					// Impulse scalar
 					m1 := tc.Mass
 					m2 := other.Mass
-					if m1 == 0 { m1 = 1200 }
-					if m2 == 0 { m2 = 1200 }
-					
+					if m1 == 0 {
+						m1 = 1200
+					}
+					if m2 == 0 {
+						m2 = 1200
+					}
+
 					j := -(1 + restitution) * dot / (1/m1 + 1/m2)
-					
+
 					// Impulse vector
 					ix := j * nx
 					iy := j * ny
-					
+
 					// Apply velocity change
 					tc.VelocityX += ix / m1
 					tc.VelocityY -= iy / m1
-					
+
 					other.VelocityX -= ix / m2
 					other.VelocityY += iy / m2
-					
+
 					// Positional Correction
 					overlap := minDist - dist
-					percent := 0.5 
+					percent := 0.5
 					slop := 1.0
-					
+
 					if overlap > slop {
 						correctionX := nx * overlap * percent
 						correctionY := ny * overlap * percent
-						
+
 						// Apply correction directly to position
 						tc.X += correctionX
 						tc.Y += correctionY
-						
+
 						other.X -= correctionX
 						other.Y -= correctionY
 					}
@@ -2514,11 +2527,11 @@ func (gs *GameplayScreen) spawnInitialTraffic() {
 	if len(gs.roadSegments) == 0 {
 		return
 	}
-	
+
 	segment := gs.roadSegments[0]
 	laneWidth := 80.0
 	playerY := gs.playerCar.Y
-	
+
 	// Spawn traffic in each lane (skip lane 0)
 	for lane := 1; lane < segment.LaneCount; lane++ {
 		// Spawn at most one vehicle ahead and behind with probability to keep density low
@@ -2535,7 +2548,7 @@ func (gs *GameplayScreen) spawnInitialTraffic() {
 func (gs *GameplayScreen) spawnTraffic(segment RoadSegment, laneWidth float64, playerY float64) {
 	// Check cooldown before attempting to spawn
 	currentTime := time.Now().UnixMilli()
-	if currentTime - gs.lastSpawnTime < gs.spawnCooldown {
+	if currentTime-gs.lastSpawnTime < gs.spawnCooldown {
 		return
 	}
 	gs.lastSpawnTime = currentTime
@@ -2556,7 +2569,7 @@ func (gs *GameplayScreen) spawnTraffic(segment RoadSegment, laneWidth float64, p
 		}
 
 		// Lower chance to spawn behind
-		if rand.Float64() < baseProbability * 0.4 {
+		if rand.Float64() < baseProbability*0.4 {
 			gs.spawnTrafficInDirection(segment, laneWidth, playerY, lane, false)
 		}
 	}
@@ -2566,7 +2579,7 @@ func (gs *GameplayScreen) spawnTraffic(segment RoadSegment, laneWidth float64, p
 func (gs *GameplayScreen) spawnTrafficInDirection(segment RoadSegment, laneWidth float64, playerY float64, lane int, ahead bool) {
 	// Find existing traffic in this lane
 	var laneTraffic []*TrafficCar
-	
+
 	gs.trafficMutex.RLock()
 	for _, tc := range gs.traffic {
 		// Check if traffic is logically in this lane or moving into it
@@ -2576,7 +2589,7 @@ func (gs *GameplayScreen) spawnTrafficInDirection(segment RoadSegment, laneWidth
 		}
 	}
 	gs.trafficMutex.RUnlock()
-	
+
 	// Determine spawn range - spawn well off-screen
 	// Screen height is 600, so we want to spawn at least 1000px away from player
 	var minY, maxY float64
@@ -2591,10 +2604,10 @@ func (gs *GameplayScreen) spawnTrafficInDirection(segment RoadSegment, laneWidth
 		minY = playerY + 800
 		maxY = playerY + trafficSpawnRange
 	}
-	
+
 	// Generate a candidate spawn position uniformly in range
 	spawnY := minY + rand.Float64()*(maxY-minY)
-	
+
 	// DENSITY CHECK: Increase minimum distance for faster lanes to prevent overcrowding
 	// Lane 1 (60mph) -> 150px
 	// Lane 2 (70mph) -> 250px
@@ -2610,39 +2623,39 @@ func (gs *GameplayScreen) spawnTrafficInDirection(segment RoadSegment, laneWidth
 	// Check if the candidate position is safe (maintaining density-aware distance)
 	isSafe := true
 	for _, tc := range laneTraffic {
-		if math.Abs(tc.Y - spawnY) < minSpawnDist {
+		if math.Abs(tc.Y-spawnY) < minSpawnDist {
 			isSafe = false
 			break
 		}
 	}
-	
+
 	// Additional cluster check: ensure we don't spawn too many cars in a small area across all lanes
 	if isSafe {
 		gs.trafficMutex.RLock()
 		carsInProximity := 0
 		for _, tc := range gs.traffic {
-			if math.Abs(tc.Y - spawnY) < 300.0 {
+			if math.Abs(tc.Y-spawnY) < 300.0 {
 				carsInProximity++
 			}
 		}
 		gs.trafficMutex.RUnlock()
-		
+
 		// If there are already 2 or more cars nearby (in any lane), don't spawn another one
 		// This prevents "walls" of traffic
 		if carsInProximity >= 2 {
 			isSafe = false
 		}
 	}
-	
+
 	// If not safe, don't spawn
 	if !isSafe {
 		return
 	}
-	
+
 	// Calculate lane center X position
 	leftEdge := -float64(segment.StartLaneIndex) * laneWidth
 	laneCenterX := leftEdge + float64(lane)*laneWidth + laneWidth/2
-	
+
 	// Check restriction: Only one car spawned ahead in player's lane
 	playerLane := gs.getCurrentLane(segment, laneWidth)
 	if ahead && lane == playerLane {
@@ -2656,15 +2669,15 @@ func (gs *GameplayScreen) spawnTrafficInDirection(segment RoadSegment, laneWidth
 			return
 		}
 	}
-	
+
 	// Determine traffic speed (player speed limit minus 5mph)
 	// Lane 0=50, Lane 1=60, Lane 2=70, etc. (match player steps)
 	speedLimitMPH := 50.0 + float64(lane)*10.0
 	// Target speed MUST be 5mph below the limit
 	targetSpeedMPH := speedLimitMPH - 5.0
-	
+
 	trafficVelocityY := targetSpeedMPH / MPHPerPixelPerFrame
-	
+
 	// Random car colors for variety
 	colors := []color.RGBA{
 		{100, 150, 200, 255}, // Blue
@@ -2675,7 +2688,7 @@ func (gs *GameplayScreen) spawnTrafficInDirection(segment RoadSegment, laneWidth
 		{200, 100, 200, 255}, // Purple
 	}
 	carColor := colors[rand.Intn(len(colors))]
-	
+
 	// Safety check: Never spawn traffic in lane 0 (reserved for player)
 	if lane == 0 {
 		return
@@ -2692,7 +2705,7 @@ func (gs *GameplayScreen) spawnTrafficInDirection(segment RoadSegment, laneWidth
 	}
 
 	carModel := models.CarInventory.GetRandomCarByCategory(allowedCategories)
-	
+
 	// Generate random name
 	nameList := data.CommonNames.Male
 	if rand.Float64() > 0.5 {
@@ -2723,7 +2736,7 @@ func (gs *GameplayScreen) spawnTrafficInDirection(segment RoadSegment, laneWidth
 	// Assuming ID string starts with a name, we can deterministically pick an image or store it in struct
 	// Since we need to store the *ebiten.Image in the struct, let's load it now.
 	// To avoid repeated IO, we should probably have a cache, but for now let's pick deterministically from assets.
-	
+
 	// Map gender from name or just random? We used a name list.
 	// Let's assume we can infer or just pick randomly.
 	// Simple hash of ID to pick an image
@@ -2731,7 +2744,7 @@ func (gs *GameplayScreen) spawnTrafficInDirection(segment RoadSegment, laneWidth
 	for _, c := range id {
 		hash += int(c)
 	}
-	
+
 	headshotIdx := hash % 8 // 4 men + 4 women
 	var headshotPath string
 	if headshotIdx < 4 {
@@ -2739,7 +2752,7 @@ func (gs *GameplayScreen) spawnTrafficInDirection(segment RoadSegment, laneWidth
 	} else {
 		headshotPath = fmt.Sprintf("assets/characters/headshots/woman%d_headshot.png", (headshotIdx-4)+1)
 	}
-	
+
 	var headshotImg *ebiten.Image
 	if img, _, err := ebitenutil.NewImageFromFile(headshotPath); err == nil {
 		headshotImg = img
@@ -2747,17 +2760,17 @@ func (gs *GameplayScreen) spawnTrafficInDirection(segment RoadSegment, laneWidth
 
 	// Create new traffic car
 	newTraffic := &TrafficCar{
-		X:           laneCenterX,
-		Y:           spawnY,
-		VelocityY:   trafficVelocityY,
-		TargetSpeed: trafficVelocityY,
-		Acceleration: accel,
-		Deceleration: decel,
-		Lane:        lane,
-		Color:       carColor,
-		Passed:      !ahead, // If spawned behind, it's already passed
+		X:                  laneCenterX,
+		Y:                  spawnY,
+		VelocityY:          trafficVelocityY,
+		TargetSpeed:        trafficVelocityY,
+		Acceleration:       accel,
+		Deceleration:       decel,
+		Lane:               lane,
+		Color:              carColor,
+		Passed:             !ahead,                 // If spawned behind, it's already passed
 		LastLaneChangeTime: time.Now().UnixMilli(), // Initialize with spawn time
-		
+
 		// New fields
 		ID:         id,
 		DriverName: driverName,
@@ -2765,7 +2778,7 @@ func (gs *GameplayScreen) spawnTrafficInDirection(segment RoadSegment, laneWidth
 		Mass:       carModel.Weight,
 		Headshot:   headshotImg,
 	}
-	
+
 	gs.trafficMutex.Lock()
 	gs.traffic = append(gs.traffic, newTraffic)
 	gs.trafficMutex.Unlock()
@@ -2774,22 +2787,22 @@ func (gs *GameplayScreen) spawnTrafficInDirection(segment RoadSegment, laneWidth
 // drawTraffic renders all traffic vehicles
 func (gs *GameplayScreen) drawTraffic(screen *ebiten.Image) {
 	carWidth, carHeight := 40, 64
-	
+
 	gs.trafficMutex.RLock()
 	defer gs.trafficMutex.RUnlock()
-	
+
 	face := text.NewGoXFace(bitmapfont.Face)
 
 	for _, tc := range gs.traffic {
 		// Calculate screen position relative to player car
 		// Center the traffic car vertically to match player car center logic
 		screenY := tc.Y - gs.cameraY - float64(carHeight)/2
-		
+
 		// Only draw if on screen
 		if screenY < -100 || screenY > float64(gs.screenHeight)+100 {
 			continue
 		}
-		
+
 		// Calculate screen X position (convert world X to screen X with camera offset)
 		screenX := tc.X - gs.cameraX - float64(carWidth)/2
 
@@ -2797,10 +2810,10 @@ func (gs *GameplayScreen) drawTraffic(screen *ebiten.Image) {
 		if screenX < -200 || screenX > float64(gs.screenWidth)+200 {
 			continue
 		}
-		
+
 		// Create traffic car sprite (similar to player car but with different color)
 		carImg := ebiten.NewImage(carWidth, carHeight)
-		
+
 		// Use the traffic car's color
 		carBody := tc.Color
 		carHighlight := color.RGBA{
@@ -2809,14 +2822,14 @@ func (gs *GameplayScreen) drawTraffic(screen *ebiten.Image) {
 			uint8(math.Min(255, float64(carBody.B)+30)),
 			255,
 		}
-		
+
 		// Draw car body
 		for y := 10; y < 54; y++ {
 			for x := 5; x < 35; x++ {
 				carImg.Set(x, y, carBody)
 			}
 		}
-		
+
 		// Draw roof (slightly darker)
 		roofColor := color.RGBA{
 			uint8(math.Max(0, float64(carBody.R)-40)),
@@ -2829,7 +2842,7 @@ func (gs *GameplayScreen) drawTraffic(screen *ebiten.Image) {
 				carImg.Set(x, y, roofColor)
 			}
 		}
-		
+
 		// Draw windshield (light blue/cyan)
 		windshieldColor := color.RGBA{100, 180, 220, 255}
 		for y := 16; y < 28; y++ {
@@ -2839,7 +2852,7 @@ func (gs *GameplayScreen) drawTraffic(screen *ebiten.Image) {
 				}
 			}
 		}
-		
+
 		// Draw wheels (black)
 		wheelColor := color.RGBA{40, 40, 40, 255}
 		// Front left wheel
@@ -2866,14 +2879,14 @@ func (gs *GameplayScreen) drawTraffic(screen *ebiten.Image) {
 				carImg.Set(x, y, wheelColor)
 			}
 		}
-		
+
 		// Add highlights
 		for y := 12; y < 14; y++ {
 			for x := 8; x < 32; x++ {
 				carImg.Set(x, y, carHighlight)
 			}
 		}
-		
+
 		// Draw car shadow/outline (black border)
 		borderColor := color.RGBA{0, 0, 0, 255}
 		for x := 0; x < carWidth; x++ {
@@ -2884,7 +2897,7 @@ func (gs *GameplayScreen) drawTraffic(screen *ebiten.Image) {
 			carImg.Set(5, y, borderColor)
 			carImg.Set(34, y, borderColor)
 		}
-		
+
 		// Draw headlights (yellow)
 		headlightColor := color.RGBA{255, 255, 100, 255}
 		for y := 8; y < 11; y++ {
@@ -2895,7 +2908,7 @@ func (gs *GameplayScreen) drawTraffic(screen *ebiten.Image) {
 				carImg.Set(x, y, headlightColor)
 			}
 		}
-		
+
 		// Draw taillights (red)
 		taillightColor := color.RGBA{255, 0, 0, 255}
 		for y := 53; y < 56; y++ {
@@ -2906,19 +2919,19 @@ func (gs *GameplayScreen) drawTraffic(screen *ebiten.Image) {
 				carImg.Set(x, y, taillightColor)
 			}
 		}
-		
+
 		// Draw the traffic car
 		op := &ebiten.DrawImageOptions{}
 		op.GeoM.Translate(screenX, screenY)
 		screen.DrawImage(carImg, op)
-		
+
 		// Debug: Profile Info
 		if gs.showDebug && gs.paused {
 			// Draw Profile Box above car
 			boxW, boxH := 200, 80 // Increased size for headshot
 			boxImg := ebiten.NewImage(boxW, boxH)
 			boxImg.Fill(color.RGBA{0, 0, 0, 220}) // Darker background
-			
+
 			// Draw border
 			for i := 0; i < boxW; i++ {
 				boxImg.Set(i, 0, color.White)
@@ -2948,14 +2961,14 @@ func (gs *GameplayScreen) drawTraffic(screen *ebiten.Image) {
 
 			boxOp := &ebiten.DrawImageOptions{}
 			// Position box to the right of the car
-			boxOp.GeoM.Translate(screenX + float64(carWidth) + 10, screenY - 30)
+			boxOp.GeoM.Translate(screenX+float64(carWidth)+10, screenY-30)
 			screen.DrawImage(boxImg, boxOp)
 
 			// Draw Info Text (Right side of headshot)
 			textOp := &text.DrawOptions{}
-			textOp.GeoM.Translate(screenX + float64(carWidth) + 10 + 80, screenY - 20) // Offset by box pos + headshot width
+			textOp.GeoM.Translate(screenX+float64(carWidth)+10+80, screenY-20) // Offset by box pos + headshot width
 			textOp.ColorScale.ScaleWithColor(color.White)
-			
+
 			// Check if CarModel is nil (shouldn't happen with new logic but safe check)
 			makeModel := "Unknown"
 			cat := "?"
@@ -2963,7 +2976,7 @@ func (gs *GameplayScreen) drawTraffic(screen *ebiten.Image) {
 				makeModel = fmt.Sprintf("%s %s", tc.CarModel.Make, tc.CarModel.Model)
 				cat = tc.CarModel.Category
 			}
-			
+
 			infoText := fmt.Sprintf("%s\n%s\nCat: %s", tc.DriverName, makeModel, cat)
 			text.Draw(screen, infoText, face, textOp)
 		} else {
@@ -2985,10 +2998,10 @@ func (gs *GameplayScreen) drawUI(screen *ebiten.Image) {
 	statsHeight := 320.0 // Increased height for toilet and crash bars
 	x := float64(gs.screenWidth) - statsWidth - 20.0
 	y := 20.0
-	
+
 	bgImg := ebiten.NewImage(int(statsWidth), int(statsHeight))
 	bgImg.Fill(color.RGBA{20, 20, 30, 200})
-	
+
 	// Draw border
 	borderColor := color.RGBA{100, 100, 120, 255}
 	w, h := int(statsWidth), int(statsHeight)
@@ -3000,7 +3013,7 @@ func (gs *GameplayScreen) drawUI(screen *ebiten.Image) {
 		bgImg.Set(0, i, borderColor)
 		bgImg.Set(w-1, i, borderColor)
 	}
-	
+
 	op := &ebiten.DrawImageOptions{}
 	op.GeoM.Translate(x, y)
 	screen.DrawImage(bgImg, op)
@@ -3010,23 +3023,23 @@ func (gs *GameplayScreen) drawUI(screen *ebiten.Image) {
 	y += 15.0
 
 	face := text.NewGoXFace(bitmapfont.Face)
-	
+
 	// Draw Miles
 	milesText := fmt.Sprintf("MILES: %.1f", gs.DistanceTravelled)
 	textOp := &text.DrawOptions{}
 	textOp.GeoM.Translate(x, y)
 	textOp.ColorScale.ScaleWithColor(color.White)
 	text.Draw(screen, milesText, face, textOp)
-	
+
 	// Draw Status Bars (Fuel, Food, Sleep)
 	barWidth := 150.0
 	barHeight := 12.0
 	spacing := 40.0 // Increased spacing (was 25.0)
-	
+
 	// Fuel
 	fuelPercent := gs.playerCar.SelectedCar.FuelLevel / gs.playerCar.SelectedCar.FuelCapacity
 	gs.drawStatusBar(screen, x, y+spacing, barWidth, barHeight, fuelPercent, "FUEL", color.RGBA{255, 165, 0, 255}) // Orange
-	
+
 	// Food
 	foodPercent := gs.FoodLevel / gs.FoodCapacity
 	gs.drawStatusBar(screen, x, y+spacing*2, barWidth, barHeight, foodPercent, "FOOD", color.RGBA{0, 255, 0, 255}) // Green
@@ -3040,9 +3053,13 @@ func (gs *GameplayScreen) drawUI(screen *ebiten.Image) {
 	gs.drawStatusBar(screen, x, y+spacing*4, barWidth, barHeight, toiletPercent, "TOILET", color.RGBA{255, 165, 0, 255}) // Orange
 
 	// Level Progress Bar
-	levelProgress := float64(gs.TotalCarsPassed - gs.PrevLevelThreshold) / float64(gs.LevelThreshold - gs.PrevLevelThreshold)
-	if levelProgress < 0 { levelProgress = 0 }
-	if levelProgress > 1 { levelProgress = 1 }
+	levelProgress := float64(gs.TotalCarsPassed-gs.PrevLevelThreshold) / float64(gs.LevelThreshold-gs.PrevLevelThreshold)
+	if levelProgress < 0 {
+		levelProgress = 0
+	}
+	if levelProgress > 1 {
+		levelProgress = 1
+	}
 
 	levelLabel := fmt.Sprintf("LEVEL %d", gs.Level)
 	gs.drawStatusBar(screen, x, y+spacing*5, barWidth, barHeight, levelProgress, levelLabel, color.RGBA{255, 215, 0, 255}) // Gold
@@ -3156,7 +3173,7 @@ func (gs *GameplayScreen) drawBillboards(screen *ebiten.Image) {
 		boardW, boardH := 100, 60
 		boardImg := ebiten.NewImage(boardW, boardH)
 		boardImg.Fill(color.RGBA{0, 50, 150, 255}) // Dark Blue
-		
+
 		// Border
 		borderCol := color.White
 		for x := 0; x < boardW; x++ {
@@ -3177,7 +3194,7 @@ func (gs *GameplayScreen) drawBillboards(screen *ebiten.Image) {
 			}
 		}
 		// Right leg
-		for x := boardW-15; x < boardW-10; x++ {
+		for x := boardW - 15; x < boardW-10; x++ {
 			for y := 0; y < 40; y++ {
 				legsImg.Set(x, y, color.RGBA{100, 100, 100, 255})
 			}
@@ -3185,7 +3202,7 @@ func (gs *GameplayScreen) drawBillboards(screen *ebiten.Image) {
 
 		// Draw legs first (so they are behind)
 		legsOp := &ebiten.DrawImageOptions{}
-		legsOp.GeoM.Translate(screenX, screenY + float64(boardH))
+		legsOp.GeoM.Translate(screenX, screenY+float64(boardH))
 		screen.DrawImage(legsImg, legsOp)
 
 		// Draw board
@@ -3195,12 +3212,12 @@ func (gs *GameplayScreen) drawBillboards(screen *ebiten.Image) {
 
 		// Text
 		textOp := &text.DrawOptions{}
-		textOp.GeoM.Translate(screenX + 10, screenY + 15)
+		textOp.GeoM.Translate(screenX+10, screenY+15)
 		textOp.ColorScale.ScaleWithColor(color.White)
 		text.Draw(screen, bb.Text, face, textOp)
-		
+
 		distOp := &text.DrawOptions{}
-		distOp.GeoM.Translate(screenX + 10, screenY + 35)
+		distOp.GeoM.Translate(screenX+10, screenY+35)
 		distOp.ColorScale.ScaleWithColor(color.RGBA{255, 255, 0, 255}) // Yellow
 		text.Draw(screen, bb.DistanceText, face, distOp)
 	}
@@ -3210,29 +3227,29 @@ func (gs *GameplayScreen) drawBillboards(screen *ebiten.Image) {
 func (gs *GameplayScreen) drawSpeedometer(screen *ebiten.Image) {
 	// Calculate speed in MPH from VelocityY (pixels per frame)
 	speedMPH := gs.playerCar.VelocityY * MPHPerPixelPerFrame
-	
+
 	// Get current lane and speed limit
 	currentSegment, _ := gs.getCurrentRoadSegment()
 	laneWidth := 80.0
 	currentLane := gs.getCurrentLane(currentSegment, laneWidth)
 	speedLimitMPH := 50.0 + float64(currentLane)*10.0
-	
+
 	// Position in top-left corner
 	x := 20.0
 	y := 20.0
 	width := 180.0
 	height := 160.0 // Increased height for spacing (was 140.0)
-	
+
 	// Draw speedometer background (semi-transparent dark box)
 	bgImg := ebiten.NewImage(int(width), int(height))
 	bgColor := color.RGBA{20, 20, 30, 200} // Dark with transparency
 	bgImg.Fill(bgColor)
-	
+
 	// Draw border
 	borderColor := color.RGBA{100, 100, 120, 255}
 	borderWidth := 2
 	w, h := int(width), int(height)
-	
+
 	// Top and bottom borders
 	for i := 0; i < w; i++ {
 		for j := 0; j < borderWidth; j++ {
@@ -3247,25 +3264,25 @@ func (gs *GameplayScreen) drawSpeedometer(screen *ebiten.Image) {
 			bgImg.Set(w-1-j, i, borderColor)
 		}
 	}
-	
+
 	op := &ebiten.DrawImageOptions{}
 	op.GeoM.Translate(x, y)
 	screen.DrawImage(bgImg, op)
-	
+
 	// Draw speed value (large number)
 	face := text.NewGoXFace(bitmapfont.Face)
 	speedText := fmt.Sprintf("%.0f", speedMPH)
-	
+
 	// Calculate text size and position
 	textScale := 3.0
 	textWidth := text.Advance(speedText, face) * textScale
 	textX := x + width/2 - textWidth/2
 	textY := y + 40.0 // Moved up slightly (was 50)
-	
+
 	textOp := &text.DrawOptions{}
 	textOp.GeoM.Scale(textScale, textScale)
 	textOp.GeoM.Translate(textX/textScale, textY/textScale)
-	
+
 	// Color based on speed (green for normal, yellow for fast, red for very fast)
 	var speedColor color.RGBA
 	if speedMPH < 50 {
@@ -3277,31 +3294,31 @@ func (gs *GameplayScreen) drawSpeedometer(screen *ebiten.Image) {
 	}
 	textOp.ColorScale.ScaleWithColor(speedColor)
 	text.Draw(screen, speedText, face, textOp)
-	
+
 	// Draw "MPH" label below speed
 	labelText := "MPH"
 	labelScale := 1.5
 	labelWidth := text.Advance(labelText, face) * labelScale
 	labelX := x + width/2 - labelWidth/2
 	labelY := y + 75.0 // Moved up (was 85)
-	
+
 	labelOp := &text.DrawOptions{}
 	labelOp.GeoM.Scale(labelScale, labelScale)
 	labelOp.GeoM.Translate(labelX/labelScale, labelY/labelScale)
 	labelOp.ColorScale.ScaleWithColor(color.RGBA{200, 200, 200, 255})
 	text.Draw(screen, labelText, face, labelOp)
-	
+
 	// Draw speed limit indicator
 	limitText := fmt.Sprintf("LIMIT: %.0f MPH", speedLimitMPH)
 	limitScale := 1.0
 	limitWidth := text.Advance(limitText, face) * limitScale
 	limitX := x + width/2 - limitWidth/2
 	limitY := y + 100.0 // Moved up slightly (was 105)
-	
+
 	limitOp := &text.DrawOptions{}
 	limitOp.GeoM.Scale(limitScale, limitScale)
 	limitOp.GeoM.Translate(limitX/limitScale, limitY/limitScale)
-	
+
 	// Color limit text: yellow if at/over limit, white if under
 	if speedMPH >= speedLimitMPH {
 		limitOp.ColorScale.ScaleWithColor(color.RGBA{255, 200, 50, 255}) // Yellow warning
@@ -3309,7 +3326,7 @@ func (gs *GameplayScreen) drawSpeedometer(screen *ebiten.Image) {
 		limitOp.ColorScale.ScaleWithColor(color.RGBA{200, 200, 200, 255}) // White
 	}
 	text.Draw(screen, limitText, face, limitOp)
-	
+
 	// Draw simple speed gauge bar
 	gs.drawSpeedGauge(screen, x+10, y+height-30, width-20, 15, speedMPH, speedLimitMPH)
 }
@@ -3319,11 +3336,11 @@ func (gs *GameplayScreen) drawSpeedGauge(screen *ebiten.Image, x, y, width, heig
 	maxSpeed := 100.0 // Maximum speed for gauge (100 MPH)
 	speedPercent := math.Min(speedMPH/maxSpeed, 1.0)
 	limitPercent := math.Min(speedLimitMPH/maxSpeed, 1.0)
-	
+
 	// Draw background bar (dark gray) with border
 	bgBar := ebiten.NewImage(int(width), int(height))
 	bgBar.Fill(color.RGBA{40, 40, 40, 255})
-	
+
 	// Draw border around gauge
 	borderColor := color.RGBA{150, 150, 150, 255}
 	w, h := int(width), int(height)
@@ -3335,17 +3352,17 @@ func (gs *GameplayScreen) drawSpeedGauge(screen *ebiten.Image, x, y, width, heig
 		bgBar.Set(0, i, borderColor)
 		bgBar.Set(w-1, i, borderColor)
 	}
-	
+
 	// Draw background bar first
 	op := &ebiten.DrawImageOptions{}
 	op.GeoM.Translate(x, y)
 	screen.DrawImage(bgBar, op)
-	
+
 	// Draw filled portion based on speed on top of background
 	filledWidth := int(width * speedPercent)
 	if filledWidth > 0 {
 		filledBar := ebiten.NewImage(filledWidth, int(height))
-		
+
 		// Color gradient: green -> yellow -> red
 		var barColor color.RGBA
 		if speedPercent < 0.5 {
@@ -3368,18 +3385,18 @@ func (gs *GameplayScreen) drawSpeedGauge(screen *ebiten.Image, x, y, width, heig
 			}
 		}
 		filledBar.Fill(barColor)
-		
+
 		filledOp := &ebiten.DrawImageOptions{}
 		filledOp.GeoM.Translate(x, y)
 		screen.DrawImage(filledBar, filledOp)
 	}
-	
+
 	// Draw speed limit marker line
 	if limitPercent > 0 && limitPercent <= 1.0 {
 		limitXPos := x + width*limitPercent
 		limitLine := ebiten.NewImage(2, int(height))
 		limitLine.Fill(color.RGBA{255, 255, 255, 255}) // White line
-		
+
 		limitOp := &ebiten.DrawImageOptions{}
 		limitOp.GeoM.Translate(limitXPos-1, y)
 		screen.DrawImage(limitLine, limitOp)
@@ -3398,7 +3415,7 @@ func (gs *GameplayScreen) drawStatusBar(screen *ebiten.Image, x, y, width, heigh
 	// Draw background (dark gray)
 	bgBar := ebiten.NewImage(int(width), int(height))
 	bgBar.Fill(color.RGBA{40, 40, 40, 200})
-	
+
 	// Draw border
 	borderColor := color.RGBA{100, 100, 100, 255}
 	w, h := int(width), int(height)
@@ -3410,25 +3427,29 @@ func (gs *GameplayScreen) drawStatusBar(screen *ebiten.Image, x, y, width, heigh
 		bgBar.Set(0, i, borderColor)
 		bgBar.Set(w-1, i, borderColor)
 	}
-	
+
 	bgOp := &ebiten.DrawImageOptions{}
 	bgOp.GeoM.Translate(x, y)
 	screen.DrawImage(bgBar, bgOp)
-	
+
 	// Draw filled portion
-	if percent > 1.0 { percent = 1.0 }
-	if percent < 0.0 { percent = 0.0 }
-	
+	if percent > 1.0 {
+		percent = 1.0
+	}
+	if percent < 0.0 {
+		percent = 0.0
+	}
+
 	filledWidth := int(width * percent)
 	if filledWidth > 0 {
 		filledBar := ebiten.NewImage(filledWidth, int(height))
 		filledBar.Fill(barColor)
-		
+
 		// Warning color (red) if low
 		if percent < 0.2 {
 			filledBar.Fill(color.RGBA{255, 50, 50, 255})
 		}
-		
+
 		fillOp := &ebiten.DrawImageOptions{}
 		fillOp.GeoM.Translate(x, y)
 		screen.DrawImage(filledBar, fillOp)
@@ -3546,21 +3567,21 @@ func (gs *GameplayScreen) updatePauseMenu() error {
 	mx, my := ebiten.CursorPosition()
 	centerX := gs.screenWidth / 2
 	centerY := gs.screenHeight / 2
-	
+
 	// Button dimensions
 	btnW, btnH := 200, 50
-	
+
 	// Resume Button (Center Y + 50)
 	if mx >= centerX-btnW/2 && mx <= centerX+btnW/2 &&
-	   my >= centerY+50-btnH/2 && my <= centerY+50+btnH/2 {
+		my >= centerY+50-btnH/2 && my <= centerY+50+btnH/2 {
 		if inpututil.IsMouseButtonJustPressed(ebiten.MouseButtonLeft) {
 			gs.paused = false
 		}
 	}
-	
+
 	// Exit Button (Center Y + 110)
 	if mx >= centerX-btnW/2 && mx <= centerX+btnW/2 &&
-	   my >= centerY+110-btnH/2 && my <= centerY+110+btnH/2 {
+		my >= centerY+110-btnH/2 && my <= centerY+110+btnH/2 {
 		if inpututil.IsMouseButtonJustPressed(ebiten.MouseButtonLeft) {
 			// Exit to title
 			if gs.onGameEnd != nil {
@@ -3568,7 +3589,7 @@ func (gs *GameplayScreen) updatePauseMenu() error {
 			}
 		}
 	}
-	
+
 	return nil
 }
 
@@ -3578,18 +3599,18 @@ func (gs *GameplayScreen) drawPauseMenu(screen *ebiten.Image) {
 	overlay := ebiten.NewImage(gs.screenWidth, gs.screenHeight)
 	overlay.Fill(color.RGBA{0, 0, 0, 200})
 	screen.DrawImage(overlay, nil)
-	
+
 	centerX := float64(gs.screenWidth) / 2
 	centerY := float64(gs.screenHeight) / 2
-	
+
 	face := text.NewGoXFace(bitmapfont.Face)
-	
+
 	// 1. Retro Player Avatar (Top)
 	avatarScale := 6.0
 	avatarSize := 8.0 * avatarScale
 	avatarX := centerX - avatarSize/2
 	avatarY := centerY - 180 // Move up slightly
-	
+
 	// Draw Avatar Background
 	avatarImg := ebiten.NewImage(8, 8)
 	// Skin
@@ -3601,7 +3622,7 @@ func (gs *GameplayScreen) drawPauseMenu(screen *ebiten.Image) {
 	}
 	avatarImg.Set(0, 2, color.RGBA{60, 40, 20, 255})
 	avatarImg.Set(7, 2, color.RGBA{60, 40, 20, 255})
-	
+
 	// Sunglasses (Cool driver look)
 	for x := 1; x < 7; x++ {
 		if x != 3 && x != 4 { // Lenses
@@ -3610,7 +3631,7 @@ func (gs *GameplayScreen) drawPauseMenu(screen *ebiten.Image) {
 			avatarImg.Set(x, 3, color.RGBA{50, 50, 50, 255})
 		}
 	}
-	
+
 	// Smile
 	avatarImg.Set(2, 6, color.RGBA{150, 50, 50, 255})
 	avatarImg.Set(3, 6, color.RGBA{150, 50, 50, 255})
@@ -3618,14 +3639,14 @@ func (gs *GameplayScreen) drawPauseMenu(screen *ebiten.Image) {
 	avatarImg.Set(5, 6, color.RGBA{150, 50, 50, 255})
 	avatarImg.Set(1, 5, color.RGBA{150, 50, 50, 255})
 	avatarImg.Set(6, 5, color.RGBA{150, 50, 50, 255})
-	
+
 	// Draw Border
 	borderImg := ebiten.NewImage(int(avatarSize)+8, int(avatarSize)+8)
 	borderImg.Fill(color.White)
 	borderOp := &ebiten.DrawImageOptions{}
 	borderOp.GeoM.Translate(avatarX-4, avatarY-4)
 	screen.DrawImage(borderImg, borderOp)
-	
+
 	// Draw Avatar
 	avatarOp := &ebiten.DrawImageOptions{}
 	avatarOp.GeoM.Scale(avatarScale, avatarScale)
@@ -3637,73 +3658,73 @@ func (gs *GameplayScreen) drawPauseMenu(screen *ebiten.Image) {
 	textW := text.Advance(pausedText, face) * 3
 	op := &text.DrawOptions{}
 	op.GeoM.Scale(3, 3)
-	op.GeoM.Translate(centerX - textW/2, avatarY + avatarSize + 20)
+	op.GeoM.Translate(centerX-textW/2, avatarY+avatarSize+20)
 	op.ColorScale.ScaleWithColor(color.White)
 	text.Draw(screen, pausedText, face, op)
-	
+
 	// Stats
 	statsY := avatarY + avatarSize + 70
 	milesText := fmt.Sprintf("TOTAL MILES: %.1f", gs.DistanceTravelled)
 	carsText := fmt.Sprintf("CARS PASSED: %d", gs.TotalCarsPassed)
-	
+
 	statsScale := 1.5
-	
+
 	// Miles
 	mW := text.Advance(milesText, face) * statsScale
 	mOp := &text.DrawOptions{}
 	mOp.GeoM.Scale(statsScale, statsScale)
-	mOp.GeoM.Translate(centerX - mW/2, statsY)
+	mOp.GeoM.Translate(centerX-mW/2, statsY)
 	mOp.ColorScale.ScaleWithColor(color.RGBA{100, 255, 255, 255})
 	text.Draw(screen, milesText, face, mOp)
-	
+
 	// Cars
 	cW := text.Advance(carsText, face) * statsScale
 	cOp := &text.DrawOptions{}
 	cOp.GeoM.Scale(statsScale, statsScale)
-	cOp.GeoM.Translate(centerX - cW/2, statsY + 30)
+	cOp.GeoM.Translate(centerX-cW/2, statsY+30)
 	cOp.ColorScale.ScaleWithColor(color.RGBA{100, 255, 100, 255})
 	text.Draw(screen, carsText, face, cOp)
-	
+
 	// Level
 	levelText := fmt.Sprintf("LEVEL: %d", gs.Level)
 	lW := text.Advance(levelText, face) * statsScale
 	lOp := &text.DrawOptions{}
 	lOp.GeoM.Scale(statsScale, statsScale)
-	lOp.GeoM.Translate(centerX - lW/2, statsY + 60)
+	lOp.GeoM.Translate(centerX-lW/2, statsY+60)
 	lOp.ColorScale.ScaleWithColor(color.RGBA{255, 215, 0, 255})
 	text.Draw(screen, levelText, face, lOp)
-	
+
 	// Buttons
 	// Helper to draw button
 	drawButton := func(label string, y float64) {
 		btnW, btnH := 200.0, 50.0
 		btnX := centerX - btnW/2
 		btnY := y - btnH/2
-		
+
 		// Button background
 		btnImg := ebiten.NewImage(int(btnW), int(btnH))
 		btnImg.Fill(color.RGBA{50, 50, 50, 255})
-		
+
 		// Check hover
 		mx, my := ebiten.CursorPosition()
 		if float64(mx) >= btnX && float64(mx) <= btnX+btnW &&
-		   float64(my) >= btnY && float64(my) <= btnY+btnH {
+			float64(my) >= btnY && float64(my) <= btnY+btnH {
 			btnImg.Fill(color.RGBA{100, 100, 100, 255}) // Highlight
 		}
-		
+
 		btnOp := &ebiten.DrawImageOptions{}
 		btnOp.GeoM.Translate(btnX, btnY)
 		screen.DrawImage(btnImg, btnOp)
-		
+
 		// Button Text
 		textW := text.Advance(label, face) * 2
 		textOp := &text.DrawOptions{}
 		textOp.GeoM.Scale(2, 2)
-		textOp.GeoM.Translate(centerX - textW/2, y - 8) // Centered
+		textOp.GeoM.Translate(centerX-textW/2, y-8) // Centered
 		textOp.ColorScale.ScaleWithColor(color.White)
 		text.Draw(screen, label, face, textOp)
 	}
-	
-	drawButton("RESUME", centerY + 50)
-	drawButton("EXIT", centerY + 110)
+
+	drawButton("RESUME", centerY+50)
+	drawButton("EXIT", centerY+110)
 }
