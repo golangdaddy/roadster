@@ -3,12 +3,15 @@
     {
       "type": 0,
       "start_segment": 3,
-      "exit_destination": "2.json"
+      "services": [
+        { "type": 0, "position": 0 }
+      ]
     },
     {
       "type": 0,
       "start_segment": 15,
       "services": [
+        { "type": 0, "position": 0 },
         { "type": 0, "position": 0 }
       ]
     },

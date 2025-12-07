@@ -797,7 +797,8 @@ func (gs *GameplayScreen) loadRoadTextures() {
 	}
 	if img, _, err := ebitenutil.NewImageFromFile("assets/road/F.png"); err == nil {
 		gs.roadTextures["F"] = img
-		// G is used for empty layby sections (same texture as F but no service)
+	}
+	if img, _, err := ebitenutil.NewImageFromFile("assets/road/G.png"); err == nil {
 		gs.roadTextures["G"] = img
 	}
 }

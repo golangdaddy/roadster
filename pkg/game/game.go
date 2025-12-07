@@ -196,10 +196,14 @@ func (game *GameLogic) loadLevel(filename string) (*road.RoadController, *LevelD
 			idx++
 		}
 
-		// Padding (Empty Layby Lane - G) - extends layby by 1 segment
+		// Padding (Empty Layby Lane - G only if exit destination is set) - extends layby by 1 segment
 		if idx < len(reconstructedLines) {
 			originalSegment = reconstructedLines[idx][1:]
-			reconstructedLines[idx] = "G" + originalSegment
+			paddingChar := "F" // Default to F (petrol/services) if no exit destination
+			if layby.ExitDestination != "" {
+				paddingChar = "G" // Use G only when exit_destination is set
+			}
+			reconstructedLines[idx] = paddingChar + originalSegment
 			idx++
 		}
 
