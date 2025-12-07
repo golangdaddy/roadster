@@ -183,15 +183,15 @@ func (game *GameLogic) loadLevel(filename string) (*road.RoadController, *LevelD
 			if idx >= len(reconstructedLines) {
 				break
 			}
-			
+
 			originalSegment = reconstructedLines[idx][1:]
-			
+
 			// Map service type to character
 			char := "F" // Default to Petrol/Services (F)
 			// TODO: Add mapping for other service types when textures exist
 			// For now we just use F regardless of service.Type
-			_ = service 
-			
+			_ = service
+
 			reconstructedLines[idx] = char + originalSegment
 			idx++
 		}
